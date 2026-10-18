@@ -406,6 +406,16 @@ def main() -> int:
     print(f"::notice::Secciones del informe: {' · '.join(sections)}")
     already_sent = db.select("daily_reports", {"select": "status", "report_date": f"eq.{report_date.isoformat()}",
                                                "status": "eq.sent"})
+    if args.dry_run and analysis:
+        # Prueba: el análisis se muestra en las anotaciones del job para revisarlo sin abrir el correo.
+        res = analysis["result"]
+        for title_, items in (("HECHOS", [f"{h['texto']} [{', '.join(h['fuentes'])}]" for h in res["hechos"]]),
+                              ("INTERPRETACIÓN", [f"{i['texto']} (conf. {i['confianza']}) [{', '.join(i['se_apoya_en'])}]"
+                                                 for i in res["interpretaciones"]]),
+                              ("HIPÓTESIS", [f"Si {h['si']} → {h['entonces']} ({h['horizonte']}; invalida: "
+                                             f"{h['invalidacion']}) [{', '.join(h['se_apoya_en'])}]" for h in res["hipotesis"]]),
+                              ("LIMITACIONES / DESCARTADO", res.get("limitaciones", []) + analysis["dropped"])):
+            print(f"::notice::{title_}: " + " || ".join(items)[:3500])
     if args.dry_run and already_sent:
         # Una prueba no sobrescribe el informe que ya se envió hoy.
         print("Prueba: el informe de hoy ya se envió; no se guarda el borrador.")
