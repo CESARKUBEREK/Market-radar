@@ -38,18 +38,24 @@ VOL_TICKER = {"spx": "spy", "ndx": "qqq", "rut": "iwm", "gold": "gld", "silver":
 
 
 def load(db, pattern: str) -> dict[str, list[tuple[str, float]]]:
-    out: dict[str, list[tuple[str, float]]] = {}
+    """Lee de la tabla observations (la vista materializada solo se refresca con la ingesta de precios).
+    Si hay varias versiones de un dato, se queda la última."""
+    latest: dict[tuple[str, str], tuple[int, float]] = {}
     offset = 0
     while True:
-        rows = db.select("v_observations_latest", {
-            "select": "series_id,as_of,value", "series_id": f"like.{pattern}", "quality_status": "eq.ok",
-            "order": "series_id,as_of", "limit": str(PAGE), "offset": str(offset)})
+        rows = db.select("observations", {
+            "select": "series_id,as_of,vintage,value", "series_id": f"like.{pattern}", "quality_status": "eq.ok",
+            "order": "series_id,as_of,vintage", "limit": str(PAGE), "offset": str(offset)})
         for r in rows:
             if r["value"] is not None:
-                out.setdefault(r["series_id"], []).append((r["as_of"], float(r["value"])))
+                latest[(r["series_id"], r["as_of"])] = (r["vintage"], float(r["value"]))
         if len(rows) < PAGE:
-            return out
+            break
         offset += PAGE
+    out: dict[str, list[tuple[str, float]]] = {}
+    for (sid, day), (_, v) in sorted(latest.items()):
+        out.setdefault(sid, []).append((day, v))
+    return out
 
 
 def pct_rank(values: list[float], x: float) -> int:
