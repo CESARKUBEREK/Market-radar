@@ -104,7 +104,8 @@ def table(headers: list[str], rows: list[list[str]], align_right_from: int = 1) 
     for r in rows:
         tds = "".join(
             f'<td style="text-align:{"right" if i >= align_right_from else "left"};padding:4px 8px;'
-            f'font-size:13px;border-bottom:1px solid #f0f2f4;white-space:nowrap">{c}</td>'
+            f'font-size:13px;border-bottom:1px solid #f0f2f4;vertical-align:top;'
+            f'{"white-space:nowrap" if len(re.sub("<[^>]+>", "", str(c))) < 40 else "line-height:1.4"}">{c}</td>'
             for i, c in enumerate(r))
         trs.append(f"<tr>{tds}</tr>")
     return (f'<table style="border-collapse:collapse;width:100%;font-family:Arial,Helvetica,sans-serif">'
@@ -151,6 +152,7 @@ def load(db: Supabase, report_date: dt.date) -> dict:
             "select": "title,source_name,url,published_at,summary,relevance",
             "published_at": f"gte.{(report_date - dt.timedelta(days=3)).isoformat()}",
             "relevance": "gte.35", "order": "relevance.desc,published_at.desc", "limit": "20"}),
+        "series_sources": {r["id"]: r["source_id"] for r in db.select("series", {"select": "id,source_id"})},
         "sync": db.select("provider_sync_logs", {
             "select": "source_id,status,started_at,error", "order": "started_at.desc", "limit": "30"}),
     }
@@ -189,17 +191,15 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str,
         lines.append(f'<span style="color:{RED}">Fuentes con errores en la última descarga: {esc(", ".join(failed))}.</span>')
     body = [section("Resumen", "".join(f'<p style="margin:4px 0;font-size:14px">{l}</p>' for l in lines))]
 
-    # Situaciones excepcionales (reglas fijas)
-    exc_html = compose_exceptional(data.get("signals") or [])
-    if exc_html:
-        body.append(exc_html)
-
-    # Análisis con IA: hechos, interpretación e hipótesis
+    # Análisis con IA primero (lo esencial), después las situaciones excepcionales con su lectura
+    exc_html = compose_exceptional(data.get("signals") or [], ai_analysis.signal_readings(analysis))
     if analysis:
         body.append(section("Análisis", ai_analysis.render(analysis)))
     elif analysis_error:
         body.append(section("Análisis", f'<p style="font-size:13px;color:{GREY}">El análisis con IA no está '
                                         f"disponible hoy ({esc(analysis_error[:120])}).</p>"))
+    if exc_html:
+        body.append(exc_html)
 
     # Alertas
     if recent_alerts:
@@ -300,18 +300,20 @@ EXC_TYPES = {"A": "Posicionamiento extremo", "B": "Posible liquidación", "C": "
              "D": "Flujos de capital", "E": "Movimiento anómalo"}
 
 
-def compose_exceptional(signals: list[dict]) -> str:
+def compose_exceptional(signals: list[dict], readings: dict[int, str] | None = None) -> str:
+    readings = readings or {}
     if not signals:
         return section(EXC_TITLE, f'<p style="font-size:13px;color:{GREY}">Ninguna hoy según las '
                                                      "reglas exceptional-v1.1.</p>")
     rows = []
-    for s in signals[:15]:
+    for idx, s in enumerate(signals[:15]):
         color = RED if s["severidad"] == "alta" else "#9a6700"
         rows.append([f'<span style="color:{color};font-weight:600">{esc(EXC_TYPES.get(s["tipo"], s["tipo"]))}</span>'
                      f'<br><span style="font-size:11px;color:{GREY}">{esc(s["naturaleza"])}</span>',
-                     f'<b>{esc(s["titulo"])}</b><br><span style="font-size:12px">{esc(s["detalle"])}</span>'
+                     f'<b>{esc(s["titulo"])}</b><br><span style="font-size:12px">{esc(readings.get(idx) or s["detalle"])}</span>'
                      f'<br><span style="font-size:11px;color:{GREY}">Fuente: {esc(", ".join(s["fuentes"]))} · '
-                     f'dato del {esc(s["fecha_dato"][:10])}</span>'])
+                     f'dato del {esc(s["fecha_dato"][8:10])}/{esc(s["fecha_dato"][5:7])}'
+                     + (" · lectura redactada por IA" if idx in readings else "") + '</span>'])
     note = (f'<p style="font-size:11px;color:{GREY};margin:6px 0 0">Capa descriptiva de la Vía A con reglas fijas '
             "(exceptional-v1.1), sin validación estadística. No es el radar de fragilidad de la Vía B (puntuaciones "
             "de combustible y chispa del Anexo A), que solo se publicará si supera su backtest. «Compatible con» "
@@ -458,6 +460,9 @@ def main() -> int:
     if args.dry_run and analysis:
         # Prueba: el análisis se muestra en las anotaciones del job para revisarlo sin abrir el correo.
         res = analysis["result"]
+        print("::notice::LO ESENCIAL: " + res.get("titular", "") + " || " +
+              " || ".join(p["texto"] for p in res.get("puntos", [])) + " || A VIGILAR: " +
+              " || ".join(v["texto"] for v in res.get("a_vigilar", [])))
         for title_, items in (("HECHOS", [f"{h['texto']} [{', '.join(h['fuentes'])}]" for h in res["hechos"]]),
                               ("INTERPRETACIÓN", [f"{i['texto']} (conf. {i['confianza']}) [{', '.join(i['se_apoya_en'])}]"
                                                  for i in res["interpretaciones"]]),

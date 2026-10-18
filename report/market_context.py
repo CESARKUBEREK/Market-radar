@@ -147,6 +147,8 @@ def instrument_context(series: list[tuple[str, float]], is_rate: bool) -> dict:
         f"variacion_6_meses_{unit}": _chg(cur, _ago(series, 182), is_rate),
         f"variacion_12_meses_{unit}": _chg(cur, _ago(series, 365), is_rate),
         f"variacion_en_el_año_{unit}": _chg(cur, year_start, is_rate),
+        "nivel_media_50": None if sma50 is None else round(sma50, 2 if is_rate or abs(sma50) >= 10 else 4),
+        "nivel_media_200": None if sma200 is None else round(sma200, 2 if is_rate or abs(sma200) >= 10 else 4),
         f"distancia_a_media_50_{unit}": dist(sma50),
         f"distancia_a_media_200_{unit}": dist(sma200),
         "pendiente_media_50_en_20_sesiones_%": None if slope50 is None else round(slope50, 2),
@@ -215,6 +217,20 @@ def macro_context(macro: dict, closes: dict, correlations: list[dict]) -> dict:
                                          "hace_3_meses": back(91), "hace_1_año": back(365),
                                          "minimo_desde_2020": min(v for _, v in spread),
                                          "fuente": "FRED (DGS10 − DGS2)"}
+    b, w = closes.get("brent"), closes.get("wti")
+    if b and w:
+        dw = dict(w)
+        spread = [(d, v - dw[d]) for d, v in b if d in dw]
+        if len(spread) > 250:
+            vals = [x for _, x in spread]
+            cur = spread[-1]
+            out["diferencial_brent_wti_usd"] = {
+                "fecha": cur[0], "actual": round(cur[1], 2),
+                "percentil_desde_2020": round(100 * sum(x <= cur[1] for x in vals) / len(vals)),
+                "media_desde_2020": round(sum(vals) / len(vals), 2),
+                "hace_3_meses": round(next((x for d, x in reversed(spread)
+                                            if d <= (dt.date.fromisoformat(cur[0]) - dt.timedelta(days=91)).isoformat()), 0), 2),
+                "nota": "Brent: precio spot de Europa (FRED DCOILBRENTEU); WTI: spot de Cushing (DCOILWTICO)"}
     corr = []
     for c in correlations or []:
         cur, lo, hi = c.get("corr_60"), c.get("min_1y"), c.get("max_1y")
