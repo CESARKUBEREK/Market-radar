@@ -97,7 +97,7 @@ jobs:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           REPORT_TO: ${{ secrets.REPORT_TO }}
-          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL || 'https://market-radar-pink.vercel.app' }}
           REPORT_FORCE: ${{ github.event_name == 'workflow_dispatch' }}
           REPORT_DRY_RUN: ${{ inputs.report_dry_run }}
         run: python report/daily_report.py
