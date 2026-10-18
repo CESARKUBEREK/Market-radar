@@ -30,6 +30,11 @@ export const CATEGORIES: [string, string][] = [
 ];
 
 export const RULE_LABELS: Record<string, string> = {
+  exc_A: "Posicionamiento extremo",
+  exc_B: "Posible liquidación",
+  exc_C: "Apalancamiento",
+  exc_D: "Flujos ETF",
+  exc_E: "Movimiento anómalo",
   move_3sd: "Movimiento extremo",
   high_52w: "Máximo 52 semanas",
   low_52w: "Mínimo 52 semanas",

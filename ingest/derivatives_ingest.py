@@ -109,8 +109,11 @@ def okx_oi() -> list[dict]:
     data = get("https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-volume",
                params={"ccy": "BTC", "period": "1D"}).json()["data"]
     out = []
+    today = now_utc().date()
     for ts, oi, vol in data:
         day = utc_day(ts)
+        if day >= today:            # el día en curso aún no está cerrado
+            continue
         pub = dt.datetime.combine(day + dt.timedelta(days=1), dt.time(0, 30), dt.timezone.utc)
         out += [obs("okx_btc_oi_usd", day, round(float(oi)), pub), obs("okx_btc_volume_usd", day, round(float(vol)), pub)]
     return out

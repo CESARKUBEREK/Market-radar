@@ -160,6 +160,18 @@ def build_evidence(data: dict, report_date: dt.date) -> dict:
     for k, v in macro.items():
         ev[f"X_{k}"] = {"tipo": "contexto macro (calculado)", "datos": v}
 
+    # Situaciones excepcionales detectadas por reglas (S) y posicionamiento COT de todos los mercados
+    for i, sg in enumerate((data.get("signals") or [])[:15], 1):
+        ev[f"S{i}"] = {"tipo": "situación excepcional (regla fija)", "clase": sg["tipo"], "titulo": sg["titulo"],
+                       "detalle": sg["detalle"], "naturaleza": sg["naturaleza"], "severidad": sg["severidad"],
+                       "fuentes_del_dato": sg["fuentes"], "fecha_dato": sg["fecha_dato"], "metricas": sg["metricas"]}
+    if data.get("cot_overview"):
+        ev["X_posicionamiento_cot"] = {"tipo": "contexto macro (calculado)", "datos": [
+            {k: o.get(k) for k in ("instrumento", "categoria", "neta_contratos", "percentil_5_años",
+                                   "cambio_semanal_contratos", "neta_sobre_interes_abierto_%",
+                                   "interes_abierto_percentil_5_años", "fecha_posiciones")}
+            for o in data["cot_overview"]]}
+
     for i, n in enumerate((data.get("news_ai") or [])[:20], 1):
         ev[f"N{i}"] = {"tipo": "noticia oficial", "fecha": _paris(n["published_at"]), "fuente": n["source_name"],
                        "titular": n["title"], "resumen": (n.get("summary") or "")[:300], "url": n["url"]}
@@ -188,7 +200,17 @@ EVIDENCIA disponible (identificadores entre corchetes, solo en las listas de fue
 (variaciones a 1 semana-12 meses, distancia a las medias de 50 y 200 sesiones, último cruce de medias, \
 tendencia_calculada, máximos y mínimos con fecha, percentil del nivel desde 2020, régimen de volatilidad, rachas). \
 X_…: contexto macro (liquidez neta de la Fed, M2, fondos federales, NFCI, curva 2-10 años, correlaciones). \
-A: alertas. C: calendario. N: noticias oficiales. P: patrones de movimientos conjuntos detectados por reglas.
+A: alertas. C: calendario. N: noticias oficiales. P: patrones de movimientos conjuntos detectados por reglas. \
+S…: situaciones excepcionales detectadas por reglas fijas (A posicionamiento extremo, B posible liquidación, \
+C exceso de apalancamiento, D flujos de ETF, E movimiento anómalo). X_posicionamiento_cot: posicionamiento COT \
+(neta y percentil de 5 años) de todos los mercados.
+
+SITUACIONES EXCEPCIONALES: una entrada por cada S, citando su identificador. Explica qué significa y qué NO \
+significa (p. ej. un posicionamiento extremo no anticipa la dirección del precio; indica sensibilidad a noticias). \
+Respeta su «naturaleza»: «confirmado por fuente» se puede afirmar; «compatible con» solo se describe como \
+compatible, nunca como confirmado. Relaciónala con la tendencia (T) y el macro (X) si procede. El COT refleja \
+posiciones del martes publicadas el viernes: no describe operaciones en tiempo real. Los flujos de ETF son \
+creaciones y reembolsos de acciones, no volumen negociado.
 
 PANORAMA: una entrada por cada instrumento de la lista obligatoria que recibes, citando su T_<instrumento>. \
 En 1 o 2 frases: dirección y fuerza de la tendencia (usa la tendencia_calculada, no la contradigas), dónde está el \
@@ -221,8 +243,12 @@ En las hipótesis, el campo «si» empieza directamente por la condición, sin l
 SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["panorama", "hechos", "interpretaciones", "hipotesis", "limitaciones"],
+    "required": ["situaciones", "panorama", "hechos", "interpretaciones", "hipotesis", "limitaciones"],
     "properties": {
+        "situaciones": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False, "required": ["senal", "lectura", "fuentes"],
+            "properties": {"senal": {"type": "string"}, "lectura": {"type": "string"},
+                           "fuentes": {"type": "array", "items": {"type": "string"}}}}},
         "panorama": {"type": "array", "items": {
             "type": "object", "additionalProperties": False, "required": ["instrument_id", "lectura", "fuentes"],
             "properties": {"instrument_id": {"type": "string"}, "lectura": {"type": "string"},
@@ -303,6 +329,22 @@ def validate(result: dict, known: set[str], evidence: dict | None = None) -> tup
         if k.startswith("T_") and t["instrument_id"] in market_context.CORE and t["instrument_id"] not in seen:
             panorama.append({"instrument_id": t["instrument_id"], "lectura": _fallback_reading(t), "fuentes": [k]})
             dropped.append(f"panorama completado por código: {t['instrument_id']}")
+    situaciones, seen_s = [], set()
+    for x in result.get("situaciones", []):
+        sid = x.get("senal", "")
+        if sid not in evidence or not sid.startswith("S") or sid in seen_s:
+            dropped.append(f"situación sin señal válida: {sid}")
+            continue
+        seen_s.add(sid)
+        refs = ok_refs(x.get("fuentes", [])) or [sid]
+        if sid not in refs:
+            refs.insert(0, sid)
+        situaciones.append({"senal": sid, "lectura": x.get("lectura", ""), "fuentes": refs})
+    for k, v in evidence.items():
+        if k.startswith("S") and k[1:].isdigit() and k not in seen_s:
+            situaciones.append({"senal": k, "lectura": v["detalle"], "fuentes": [k]})
+            dropped.append(f"situación completada por código: {k}")
+    situaciones.sort(key=lambda x: int(x["senal"][1:]))
     rank = {iid: i for i, iid in enumerate(market_context.CORE)}
     panorama.sort(key=lambda p: rank.get(p["instrument_id"], 99))
 
@@ -327,7 +369,7 @@ def validate(result: dict, known: set[str], evidence: dict | None = None) -> tup
             hyp.append({**hp, "se_apoya_en": refs})
         else:
             dropped.append(f"hipótesis sin apoyo: {hp.get('si', '')[:80]}")
-    return {"panorama": panorama, "hechos": hechos, "interpretaciones": interp, "hipotesis": hyp,
+    return {"situaciones": situaciones, "panorama": panorama, "hechos": hechos, "interpretaciones": interp, "hipotesis": hyp,
             "limitaciones": result.get("limitaciones", [])}, dropped
 
 
@@ -362,6 +404,8 @@ def _refs_html(refs: list[str], sources: dict) -> str:
             parts.append(f'{_esc(r)} {_esc(s.get("instrumento"))} ({_esc(s.get("fuente"))}, {_esc(s.get("fecha_cierre"))})')
         elif s.get("tipo") == "tendencia e historia (calculado)":
             parts.append(f'histórico {_esc(s.get("instrumento"))} ({_esc(s.get("fuente"))})')
+        elif s.get("tipo") == "situación excepcional (regla fija)":
+            parts.append(f'{_esc(r)} {", ".join(_esc(f) for f in s.get("fuentes_del_dato", []))}')
         elif s.get("tipo") == "contexto macro (calculado)":
             parts.append(f'macro {_esc(r[2:].replace("_", " "))}')
         elif s.get("tipo") == "evento de calendario":
@@ -424,7 +468,15 @@ def render(analysis: dict) -> str:
            f'Se invalida si: {_esc(h["invalidacion"])}.</span>' + _refs_html(h["se_apoya_en"], src)
            for h in res["hipotesis"]]
     lim = [_esc(x) for x in res.get("limitaciones", [])]
-    return (label + block("Hechos: qué ha ocurrido y qué lo confirma", "#1f2328", hechos) + panorama_html
+    sit = []
+    for x in res.get("situaciones", []):
+        sg = src.get(x["senal"], {})
+        color = "#cf222e" if sg.get("severidad") == "alta" else "#9a6700"
+        sit.append(f'<b style="color:{color}">{_esc(sg.get("titulo", ""))}</b> '
+                   f'<span style="color:#6e7781;font-size:12px">({_esc(sg.get("naturaleza", ""))})</span><br>'
+                   f'{_esc(x["lectura"])}' + _refs_html([r for r in x["fuentes"] if r != x["senal"]], src))
+    return (label + block("Situaciones excepcionales: qué significan", "#cf222e", sit)
+            + block("Hechos: qué ha ocurrido y qué lo confirma", "#1f2328", hechos) + panorama_html
             + block("Interpretación: por qué podría importar", "#0550ae", interp)
             + block("Hipótesis: qué podría pasar y bajo qué condiciones", "#8250df", hyp)
             + block("Limitaciones", "#6e7781", lim))

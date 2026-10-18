@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ingest"))
 from common import Supabase, env_flag, now_utc, require_env  # noqa: E402
 
 import ai_analysis  # noqa: E402
+import exceptional  # noqa: E402
 import market_context  # noqa: E402
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -52,6 +53,8 @@ RULE_LABELS = {
     "move_3sd": "Movimiento extremo", "high_52w": "Máximo 52 semanas", "low_52w": "Mínimo 52 semanas",
     "vol_regime": "Volatilidad", "rate_move": "Tipos", "net_liquidity_move": "Liquidez",
     "fedfunds_change": "Política monetaria", "macro_release": "Nuevo dato",
+    "exc_A": "Posicionamiento extremo", "exc_B": "Posible liquidación", "exc_C": "Apalancamiento",
+    "exc_D": "Flujos ETF", "exc_E": "Movimiento anómalo",
 }
 GREEN, RED, GREY, INK = "#1a7f37", "#cf222e", "#6e7781", "#1f2328"
 
@@ -130,7 +133,7 @@ def load(db: Supabase, report_date: dt.date) -> dict:
                   "series_id.like.imf_debt_gdp_*)",
             "quality_status": "eq.ok", "order": "series_id,as_of", "limit": "2000"}),
         "alerts": db.select("alerts", {
-            "select": "as_of,rule_id,title,kind", "as_of": f"gte.{since}",
+            "select": "as_of,rule_id,title,kind", "as_of": f"gte.{since}", "rule_id": "not.like.exc_*",
             "order": "as_of.desc,rule_id"}),
         "events": db.select("events_calendar", {
             "select": "event_at,kind,notes,country_code", "event_at": f"gte.{report_date.isoformat()}",
@@ -185,6 +188,11 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str,
     if failed:
         lines.append(f'<span style="color:{RED}">Fuentes con errores en la última descarga: {esc(", ".join(failed))}.</span>')
     body = [section("Resumen", "".join(f'<p style="margin:4px 0;font-size:14px">{l}</p>' for l in lines))]
+
+    # Situaciones excepcionales (reglas fijas)
+    exc_html = compose_exceptional(data.get("signals") or [])
+    if exc_html:
+        body.append(exc_html)
 
     # Análisis con IA: hechos, interpretación e hipótesis
     if analysis:
@@ -287,6 +295,28 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str,
     return title, html_doc, content
 
 
+EXC_TYPES = {"A": "Posicionamiento extremo", "B": "Posible liquidación", "C": "Exceso de apalancamiento",
+             "D": "Flujos de capital", "E": "Movimiento anómalo"}
+
+
+def compose_exceptional(signals: list[dict]) -> str:
+    if not signals:
+        return section("Situaciones excepcionales", f'<p style="font-size:13px;color:{GREY}">Ninguna hoy según las '
+                                                     "reglas exceptional-v1.0.</p>")
+    rows = []
+    for s in signals[:15]:
+        color = RED if s["severidad"] == "alta" else "#9a6700"
+        rows.append([f'<span style="color:{color};font-weight:600">{esc(EXC_TYPES.get(s["tipo"], s["tipo"]))}</span>'
+                     f'<br><span style="font-size:11px;color:{GREY}">{esc(s["naturaleza"])}</span>',
+                     f'<b>{esc(s["titulo"])}</b><br><span style="font-size:12px">{esc(s["detalle"])}</span>'
+                     f'<br><span style="font-size:11px;color:{GREY}">Fuente: {esc(", ".join(s["fuentes"]))} · '
+                     f'dato del {esc(s["fecha_dato"][:10])}</span>'])
+    note = (f'<p style="font-size:11px;color:{GREY};margin:6px 0 0">Reglas fijas (exceptional-v1.0). «Compatible con» '
+            "indica un patrón coherente con esa situación, no su confirmación. El COT refleja posiciones del martes, "
+            "publicadas el viernes.</p>")
+    return section("Situaciones excepcionales", table(["Tipo", "Señal"], rows, align_right_from=99) + note)
+
+
 AGENDA_DAYS = 7
 AGENDA_KINDS = {"fomc": "Fed", "cpi": "Inflación", "employment": "Empleo", "other": "Macro",
                 "holiday": "Festivo", "expiry": "Vencimiento", "rebalance": "Rebalanceo", "roll": "WTI"}
@@ -384,11 +414,19 @@ def main() -> int:
 
     db = Supabase.from_env()
     data = load(db, report_date)
+    data["closes"] = market_context.load_closes(db)
+    data["macro"] = market_context.load_macro(db)
+    try:
+        rates = {s["instrument_id"] for s in data["summary"] if s["is_rate"]}
+        data["signals"], data["cot_overview"] = exceptional.detect(db, data["closes"], rates)
+        saved = exceptional.store(db, data["signals"], {s["instrument_id"]: s["series_id"] for s in data["summary"]})
+        print(f"::notice::Situaciones excepcionales: {len(data['signals'])} señales "
+              f"({saved} nuevas en alertas): " + " | ".join(x["titulo"] for x in data["signals"])[:3000])
+    except Exception as exc:
+        data["signals"], data["cot_overview"] = [], []
+        print(f"::warning::Detector de situaciones excepcionales: {str(exc)[:300]}")
     analysis, analysis_error = None, None
     try:
-        if os.environ.get("OPENAI_API_KEY", "").strip():
-            data["closes"] = market_context.load_closes(db)
-            data["macro"] = market_context.load_macro(db)
         analysis = ai_analysis.run(data, report_date)
         if analysis:
             u = analysis["usage"]
@@ -420,6 +458,8 @@ def main() -> int:
                                              f"{h['invalidacion']}) [{', '.join(h['se_apoya_en'])}]" for h in res["hipotesis"]]),
                               ("LIMITACIONES / DESCARTADO", res.get("limitaciones", []) + analysis["dropped"])):
             print(f"::notice::{title_}: " + " || ".join(items)[:3500])
+        print("::notice::SITUACIONES: " + " || ".join(f"{x['senal']}: {x['lectura']}"
+                                                   for x in res.get("situaciones", []))[:3900])
         print("::notice::PANORAMA: " + " || ".join(f"{p['instrument_id']}: {p['lectura']}"
                                                 for p in res.get("panorama", []))[:3900])
     if args.dry_run and already_sent:
