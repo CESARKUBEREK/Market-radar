@@ -236,7 +236,10 @@ invalidación no puede solaparse con la condición. Cada hipótesis se evaluará
 rellena también su versión medible: «condicion_activo» (identificador del instrumento, p. ej. «us10y»), \
 «condicion_operador» («>» o «<»), «condicion_nivel» (en las unidades del nivel del activo; tipos en %), \
 «consecuencia_activo» y «consecuencia_direccion» («sube» o «baja»: lo que debería hacer ese activo si la \
-hipótesis es correcta) y «horizonte_sesiones» (entre 1 y 20). Una hipótesis sin consecuencia medible no sirve.
+hipótesis es correcta) y «horizonte_sesiones» (entre 1 y 20). Una hipótesis sin consecuencia medible no sirve. \
+Los campos «si», «entonces» e «invalidacion» se escriben en español natural y con formato español («el US10Y \
+supera el 5,31 %»), nunca como fórmula («us10y > 5.31»): la versión medible ya va en sus propios campos. \
+Prefiere hipótesis que relacionen activos distintos (p. ej. tipos → bolsa, dólar → oro).
 5. A VIGILAR (máx. 3): eventos del calendario C o niveles concretos de la evidencia para las próximas sesiones.
 6. SITUACIONES: una lectura por cada S («senal» = solo su identificador): qué significa y qué no. Respeta su \
 naturaleza («compatible con» nunca es «confirmado»). El COT es del martes, publicado el viernes.
