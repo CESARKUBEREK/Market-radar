@@ -94,9 +94,10 @@ def parse_date(raw: str | None) -> dt.datetime | None:
     return d if d.tzinfo else d.replace(tzinfo=dt.timezone.utc)
 
 
-def parse_feed(text: str) -> list[dict]:
+def parse_feed(text: str | bytes) -> list[dict]:
     """RSS 2.0, RSS 1.0 (RDF) o Atom; se ignoran los espacios de nombres."""
-    root = ET.fromstring(text.encode("utf-8") if isinstance(text, str) else text)
+    raw = text.encode("utf-8") if isinstance(text, str) else text
+    root = ET.fromstring(raw.lstrip(b"\xef\xbb\xbf").lstrip())   # la Fed antepone una marca BOM
     for el in root.iter():
         if isinstance(el.tag, str) and "}" in el.tag:
             el.tag = el.tag.split("}", 1)[1]
@@ -119,7 +120,7 @@ def parse_feed(text: str) -> list[dict]:
 def fetch(url: str, headers: dict) -> list[dict]:
     r = requests.get(url, headers=headers, timeout=60)
     r.raise_for_status()
-    return parse_feed(r.text)
+    return parse_feed(r.content)
 
 
 def link_instruments(item: dict, defaults: list[str]) -> list[str]:
