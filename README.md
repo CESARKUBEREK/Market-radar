@@ -16,6 +16,11 @@ y las guarda en `observations` con su fecha de publicación real (ALFRED).
 | `published_at` | Esa fecha a las 23:59:59 hora de Nueva York (conservador para el backtest) |
 | `value` / `quality_status` | Un "." de FRED se guarda como NULL y `missing` |
 
+Solo se guardan observaciones desde el **1 de enero de 2020**. Las series con
+`attributes.vintages = 'latest'` en el catálogo (por ahora, NFCI, que se
+recalcula entera cada semana) guardan una sola versión por fecha, la última
+publicada; no sirven para un backtest point-in-time.
+
 Tras cada serie, el script guarda en `series.attributes` las unidades y la
 frecuencia oficiales de FRED (`fred_units`, `fred_frequency`…) para verificar
 el catálogo. Cada ejecución queda en `provider_sync_logs`.

@@ -14,11 +14,16 @@ Convenciones:
   la fecha de publicación, no la hora; usar el final del día es la opción
   conservadora para el backtest (nunca se usa un dato antes de tiempo).
 - Un valor "." de FRED es un dato ausente: value = NULL, quality_status = 'missing'.
+- Solo se guardan observaciones desde HISTORY_START (2020-01-01).
+- Series con attributes.vintages = 'latest' (p. ej. NFCI, que se recalcula
+  entero cada semana) guardan una sola versión por fecha: vintage = 0, que se
+  sobrescribe en cada ejecución, y published_at = fecha de la última versión.
+  Estas series no son aptas para un backtest point-in-time.
 
 Modos:
 - incremental (por defecto): vintages de los últimos días; para series diarias,
   solo observaciones del último año largo.
-- --backfill: todo el historial con todas sus vintages.
+- --backfill: todo el historial desde HISTORY_START con todas sus vintages.
 
 Variables de entorno: FRED_API_KEY, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
 Opcionales (para GitHub Actions): INGEST_BACKFILL=true, INGEST_SERIES=id1,id2.
@@ -45,7 +50,9 @@ VINTAGE_PAGE = 10_000
 MAX_VINTAGES_PER_REQUEST = 2000   # límite de FRED por petición de observaciones
 REALTIME_LOOKBACK_DAYS = 10    # modo incremental: vintages publicadas en estos días
 DAILY_LOOKBACK_DAYS = 400      # modo incremental: ventana de observaciones de series diarias
-FULL_REALTIME_START = "1776-07-04"
+HISTORY_START = "2020-01-01"          # primera fecha de observación que se guarda
+FULL_REALTIME_START = "2019-12-01"    # vintages desde un mes antes, por si alguna se publica por adelantado
+LATEST_VINTAGE = 0                    # vintage fija de las series que guardan solo la última versión
 REALTIME_END = "9999-12-31"
 
 
@@ -257,23 +264,31 @@ def check_metadata(api_key: str, series: dict) -> dict:
 def ingest_series(db: Supabase, api_key: str, series: dict, backfill: bool) -> dict:
     code = series["source_code"]
     today = dt.date.today()
+    latest_only = (series.get("attributes") or {}).get("vintages") == "latest"
     if backfill:
-        realtime_start, observation_start = FULL_REALTIME_START, None
+        realtime_start, observation_start = FULL_REALTIME_START, HISTORY_START
     else:
         realtime_start = (today - dt.timedelta(days=REALTIME_LOOKBACK_DAYS)).isoformat()
-        observation_start = (
-            (today - dt.timedelta(days=DAILY_LOOKBACK_DAYS)).isoformat()
-            if series["frequency"] == "daily" else None
-        )
+        observation_start = max(HISTORY_START, (today - dt.timedelta(days=DAILY_LOOKBACK_DAYS)).isoformat()) \
+            if series["frequency"] == "daily" else HISTORY_START
 
     # Nunca se rellena con la versión vigente si falla la descarga de vintages:
     # eso fecharía todo el historial como publicado hoy y falsearía el backtest.
-    windows = realtime_windows(fetch_vintage_dates(api_key, code, realtime_start), realtime_start)
+    vintage_dates = fetch_vintage_dates(api_key, code, realtime_start)
+    if latest_only:
+        # Solo la última versión publicada, fechada en su día de publicación.
+        windows = [(vintage_dates[-1], vintage_dates[-1])] if vintage_dates else []
+    else:
+        windows = realtime_windows(vintage_dates, realtime_start)
     raw: list[dict] = []
     for start, end in windows:
         raw.extend(fetch_observations(api_key, code, start, observation_start, end))
 
-    rows = compress([to_row(series["id"], o) for o in raw])
+    rows = [to_row(series["id"], o) for o in raw]
+    if latest_only:
+        for row in rows:
+            row["vintage"] = LATEST_VINTAGE
+    rows = compress(rows)
     for i in range(0, len(rows), UPSERT_CHUNK):
         db.insert("observations", rows[i:i + UPSERT_CHUNK],
                   on_conflict="series_id,as_of,vintage")
@@ -291,6 +306,8 @@ def ingest_series(db: Supabase, api_key: str, series: dict, backfill: bool) -> d
     }
     if len(windows) > 1:
         result["windows"] = len(windows)
+    if latest_only:
+        result["vintages"] = "latest"
     return result
 
 
