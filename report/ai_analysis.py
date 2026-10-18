@@ -205,7 +205,7 @@ S…: situaciones excepcionales detectadas por reglas fijas (A posicionamiento e
 C exceso de apalancamiento, D flujos de ETF, E movimiento anómalo). X_posicionamiento_cot: posicionamiento COT \
 (neta y percentil de 5 años) de todos los mercados.
 
-SITUACIONES EXCEPCIONALES: una entrada por cada S, citando su identificador. Explica qué significa y qué NO \
+SITUACIONES EXCEPCIONALES: una entrada por cada S; el campo «senal» contiene SOLO su identificador («S1»). Explica qué significa y qué NO \
 significa (p. ej. un posicionamiento extremo no anticipa la dirección del precio; indica sensibilidad a noticias). \
 Respeta su «naturaleza»: «confirmado por fuente» se puede afirmar; «compatible con» solo se describe como \
 compatible, nunca como confirmado. Relaciónala con la tendencia (T) y el macro (X) si procede. El COT refleja \
@@ -347,6 +347,10 @@ def validate(result: dict, known: set[str], evidence: dict | None = None) -> tup
     situaciones, seen_s = [], set()
     for x in result.get("situaciones", []):
         sid = x.get("senal", "")
+        if sid not in evidence:          # la IA a veces pone el texto: se busca el identificador S en sus campos
+            cand = [t for t in re.findall(r"\bS\d+\b", f"{sid} {' '.join(map(str, x.get('fuentes', [])))}")
+                    if t in evidence and t not in seen_s]
+            sid = cand[0] if cand else sid
         if sid not in evidence or not sid.startswith("S") or sid in seen_s:
             dropped.append(f"situación sin señal válida: {sid}")
             continue
