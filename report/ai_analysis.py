@@ -232,7 +232,11 @@ movimiento a una noticia salvo que la noticia lo diga. Si hay explicaciones alte
 situaciones S (no validadas). Si no, «media» o «baja».
 4. HIPÓTESIS (máx. 3): condición observable → consecuencia, con horizonte e invalidación. Los niveles de la \
 condición y de la invalidación deben salir de la evidencia (último, máximos, mínimos, niveles de las medias); la \
-invalidación no puede solaparse con la condición.
+invalidación no puede solaparse con la condición. Cada hipótesis se evaluará automáticamente después, así que \
+rellena también su versión medible: «condicion_activo» (identificador del instrumento, p. ej. «us10y»), \
+«condicion_operador» («>» o «<»), «condicion_nivel» (en las unidades del nivel del activo; tipos en %), \
+«consecuencia_activo» y «consecuencia_direccion» («sube» o «baja»: lo que debería hacer ese activo si la \
+hipótesis es correcta) y «horizonte_sesiones» (entre 1 y 20). Una hipótesis sin consecuencia medible no sirve.
 5. A VIGILAR (máx. 3): eventos del calendario C o niveles concretos de la evidencia para las próximas sesiones.
 6. SITUACIONES: una lectura por cada S («senal» = solo su identificador): qué significa y qué no. Respeta su \
 naturaleza («compatible con» nunca es «confirmado»). El COT es del martes, publicado el viernes.
@@ -286,10 +290,18 @@ SCHEMA = {
                            "confianza": {"type": "string", "enum": ["baja", "media", "alta"]}}}},
         "hipotesis": {"type": "array", "items": {
             "type": "object", "additionalProperties": False,
-            "required": ["si", "entonces", "horizonte", "invalidacion", "se_apoya_en"],
+            "required": ["si", "entonces", "horizonte", "invalidacion", "se_apoya_en", "condicion_activo",
+                         "condicion_operador", "condicion_nivel", "consecuencia_activo", "consecuencia_direccion",
+                         "horizonte_sesiones"],
             "properties": {"si": {"type": "string"}, "entonces": {"type": "string"},
                            "horizonte": {"type": "string"}, "invalidacion": {"type": "string"},
-                           "se_apoya_en": {"type": "array", "items": {"type": "string"}}}}},
+                           "se_apoya_en": {"type": "array", "items": {"type": "string"}},
+                           "condicion_activo": {"type": "string"},
+                           "condicion_operador": {"type": "string", "enum": [">", "<"]},
+                           "condicion_nivel": {"type": "number"},
+                           "consecuencia_activo": {"type": "string"},
+                           "consecuencia_direccion": {"type": "string", "enum": ["sube", "baja"]},
+                           "horizonte_sesiones": {"type": "integer"}}}},
         "limitaciones": {"type": "array", "items": {"type": "string"}},
     },
 }
@@ -493,6 +505,16 @@ def validate(result: dict, known: set[str], evidence: dict | None = None) -> tup
         if bad:
             dropped.append(f"hipótesis con niveles que no están en la evidencia {bad}: {hp.get('si', '')[:70]}")
             continue
+        ids = {k[2:] for k in evidence if k.startswith("T_")}
+        if hp.get("condicion_activo") not in ids or hp.get("consecuencia_activo") not in ids:
+            dropped.append(f"hipótesis con activos no reconocidos ({hp.get('condicion_activo')}, "
+                           f"{hp.get('consecuencia_activo')}): {hp.get('si', '')[:60]}")
+            continue
+        if unverified(str(hp.get("condicion_nivel")).replace(".", ","), [f"T_{hp['condicion_activo']}"], evidence):
+            dropped.append(f"hipótesis con nivel medible {hp.get('condicion_nivel')} que no está en la evidencia de "
+                           f"{hp['condicion_activo']}")
+            continue
+        hp = {**hp, "horizonte_sesiones": max(1, min(20, int(hp.get("horizonte_sesiones") or 5)))}
         hyp.append({**hp, "se_apoya_en": refs})
     titular = result.get("titular", "").strip()
     if titular and unverified(titular, list(evidence), evidence):

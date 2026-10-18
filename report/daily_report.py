@@ -36,6 +36,7 @@ from common import Supabase, env_flag, now_utc, require_env  # noqa: E402
 
 import ai_analysis  # noqa: E402
 import exceptional  # noqa: E402
+import hypotheses  # noqa: E402
 import market_context  # noqa: E402
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -200,6 +201,9 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str,
                                         f"disponible hoy ({esc(analysis_error[:120])}).</p>"))
     if exc_html:
         body.append(exc_html)
+    hyp_html = compose_hypotheses(data.get("hyp_tracking"))
+    if hyp_html:
+        body.append(hyp_html)
 
     # Alertas
     if recent_alerts:
@@ -292,7 +296,41 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str,
                "stale": stale, "failed_sources": failed}
     if analysis:
         content["ai"] = {k: analysis[k] for k in ("model", "result", "dropped", "usage", "web_search")}
+    if data.get("hyp_tracking"):
+        content["seguimiento_hipotesis"] = {k: data["hyp_tracking"][k] for k in ("recuento", "tasa_acierto", "decididas")}
     return title, html_doc, content
+
+
+HYP_STATE = {"acierto": ("Acierto", GREEN), "fallo": ("Fallo", RED), "no activada": ("No activada", GREY),
+             "pendiente": ("Pendiente", GREY), "en curso": ("En curso", "#9a6700")}
+
+
+def compose_hypotheses(t: dict | None) -> str:
+    if not t or not t["items"]:
+        return ""
+    c = t["recuento"]
+    head = (f'<p style="font-size:13px;margin:4px 0 8px">{c.get("acierto", 0)} aciertos, {c.get("fallo", 0)} fallos, '
+            f'{c.get("no activada", 0)} no activadas, {c.get("en curso", 0) + c.get("pendiente", 0)} abiertas'
+            + (f' · tasa de acierto {t["tasa_acierto"]} % sobre {t["decididas"]} decididas' if t["decididas"] else "")
+            + "</p>")
+    rows = []
+    for it in t["items"][:10]:
+        label, color = HYP_STATE.get(it["estado"], (it["estado"], GREY))
+        det = ""
+        if "cambio" in it or "cambio_hasta_ahora" in it:
+            v = it.get("cambio", it.get("cambio_hasta_ahora"))
+            det = f'activada el {it["activada"][8:10]}/{it["activada"][5:7]}; {"+" if v > 0 else ""}{num(v, 0 if it["unidad"] == "pb" else 2)} {it["unidad"]}'
+        elif it.get("activada"):
+            det = f'activada el {it["activada"][8:10]}/{it["activada"][5:7]}'
+        rows.append([esc(f'{it["fecha"][8:10]}/{it["fecha"][5:7]}'),
+                     f'<b>Si</b> {esc(ai_analysis._no_si(it.get("si") or ""))} → {esc(it.get("entonces") or "")}',
+                     f'<span style="color:{color};font-weight:600">{label}</span>'
+                     + (f'<br><span style="font-size:11px;color:{GREY}">{esc(det)}</span>' if det else "")])
+    note = (f'<p style="font-size:11px;color:{GREY};margin:6px 0 0">Evaluación automática con los cierres posteriores: '
+            "la hipótesis se activa cuando se cumple su condición y acierta si, al final de su horizonte, el activo de "
+            "la consecuencia se ha movido en la dirección prevista. Medida sencilla, no un backtest.</p>")
+    return section("Seguimiento de hipótesis", head + table(["Fecha", "Hipótesis", "Estado"], rows,
+                                                          align_right_from=99) + note)
 
 
 EXC_TITLE = "Situaciones excepcionales (descriptivo, no validado)"
@@ -421,6 +459,13 @@ def main() -> int:
     data = load(db, report_date)
     data["closes"] = market_context.load_closes(db)
     data["macro"] = market_context.load_macro(db)
+    try:
+        data["hyp_tracking"] = hypotheses.track(db, data["closes"], report_date)
+        t = data["hyp_tracking"]
+        print(f"::notice::Seguimiento de hipótesis: {t['recuento']} · tasa de acierto {t['tasa_acierto']}")
+    except Exception as exc:
+        data["hyp_tracking"] = None
+        print(f"::warning::Seguimiento de hipótesis: {str(exc)[:300]}")
     try:
         rates = {s["instrument_id"] for s in data["summary"] if s["is_rate"]}
         data["signals"], data["cot_overview"] = exceptional.detect(db, data["closes"], rates)
