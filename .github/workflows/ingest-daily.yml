@@ -9,7 +9,7 @@ on:
       source:
         description: "Fuente a descargar (ninguna = solo informe)"
         type: choice
-        options: [todas, fred, tiingo, ecb, yahoo, euronext, imf, ninguna]
+        options: [todas, fred, tiingo, ecb, yahoo, euronext, imf, calendar, news, ninguna]
         default: todas
       backfill:
         description: "Descargar todo el historial desde 2020"
@@ -46,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false          # si una fuente falla, las demás siguen
       matrix:
-        source: [fred, tiingo, ecb, yahoo, euronext, imf]
+        source: [fred, tiingo, ecb, yahoo, euronext, imf, calendar, news]
     steps:
       - name: Comprobar si toca esta fuente
         id: pick
@@ -76,6 +76,7 @@ jobs:
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
+          SEC_CONTACT: ${{ vars.SEC_CONTACT }}
           SOURCE: ${{ matrix.source }}
         run: python "ingest/${SOURCE}_ingest.py"
 

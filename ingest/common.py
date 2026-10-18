@@ -80,6 +80,20 @@ class Supabase:
         )
         r.raise_for_status()
 
+    def delete(self, table: str, match: dict) -> None:
+        r = self.session.delete(f"{self.base}/{table}", params=match,
+                                headers={"Prefer": "return=minimal"}, timeout=60)
+        r.raise_for_status()
+
+    def ensure_source(self, source_id: str, provider: str, endpoint: str, notes: str) -> None:
+        """Da de alta la fuente en data_sources si no existe (no pisa estados ya revisados)."""
+        r = self.session.post(f"{self.base}/data_sources", params={"on_conflict": "id"},
+                              headers={"Prefer": "resolution=ignore-duplicates,return=minimal"},
+                              data=json.dumps({"id": source_id, "provider": provider, "endpoint": endpoint,
+                                               "cost": "Gratis", "status": "VERIFICADA", "notes": notes,
+                                               "verified_at": now_utc().isoformat()}), timeout=60)
+        r.raise_for_status()
+
     def rpc(self, function: str, args: dict | None = None) -> None:
         r = self.session.post(f"{self.base}/rpc/{function}", data=json.dumps(args or {}), timeout=300)
         r.raise_for_status()
