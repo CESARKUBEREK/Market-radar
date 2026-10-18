@@ -228,8 +228,11 @@ def ssga(ticker: str, backfill: bool) -> list[dict]:
             started = True
             continue
         if started and row and row[0] and row[2]:
-            day = dt.datetime.strptime(str(row[0]).strip(), "%d-%b-%Y").date()
-            rows.append((day, float(row[1]), float(row[2])))
+            try:
+                day = dt.datetime.strptime(str(row[0]).strip(), "%d-%b-%Y").date()
+                rows.append((day, float(row[1]), float(row[2])))
+            except (TypeError, ValueError):
+                continue                    # filas con «-» u otros valores no numéricos
     rows.sort()
     first = dt.date.fromisoformat(HISTORY_START) if backfill else now_utc().date() - dt.timedelta(days=15)
     out = []
