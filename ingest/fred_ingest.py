@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import json
 import os
 import sys
 import time
@@ -41,80 +40,19 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from common import HISTORY_START, Supabase, env_flag, now_utc, require_env, run_catalog, summarize
+
 FRED_API = "https://api.stlouisfed.org/fred"
 NEW_YORK = ZoneInfo("America/New_York")
 SOURCE_ID = "fred"
-UPSERT_CHUNK = 1000
 FRED_PAGE = 100_000
 VINTAGE_PAGE = 10_000
 MAX_VINTAGES_PER_REQUEST = 2000   # límite de FRED por petición de observaciones
 REALTIME_LOOKBACK_DAYS = 10    # modo incremental: vintages publicadas en estos días
 DAILY_LOOKBACK_DAYS = 400      # modo incremental: ventana de observaciones de series diarias
-HISTORY_START = "2020-01-01"          # primera fecha de observación que se guarda
 FULL_REALTIME_START = "2019-12-01"    # vintages desde un mes antes, por si alguna se publica por adelantado
 LATEST_VINTAGE = 0                    # vintage fija de las series que guardan solo la última versión
 REALTIME_END = "9999-12-31"
-
-
-# --------------------------------------------------------------------------- #
-# Utilidades
-# --------------------------------------------------------------------------- #
-def require_env(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if not value:
-        sys.exit(f"Falta la variable de entorno {name}")
-    return value
-
-
-def now_utc() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
-
-
-class Supabase:
-    """Cliente mínimo de PostgREST con la clave de servicio."""
-
-    def __init__(self, url: str, service_key: str) -> None:
-        self.base = url.rstrip("/") + "/rest/v1"
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "apikey": service_key,
-                "Authorization": f"Bearer {service_key}",
-                "Content-Type": "application/json",
-            }
-        )
-
-    def select(self, table: str, params: dict) -> list[dict]:
-        r = self.session.get(f"{self.base}/{table}", params=params, timeout=60)
-        r.raise_for_status()
-        return r.json()
-
-    def insert(self, table: str, rows: list[dict] | dict, *, on_conflict: str | None = None,
-               returning: bool = False):
-        prefer = []
-        if on_conflict:
-            prefer.append("resolution=merge-duplicates")
-        prefer.append("return=representation" if returning else "return=minimal")
-        params = {"on_conflict": on_conflict} if on_conflict else None
-        r = self.session.post(
-            f"{self.base}/{table}",
-            params=params,
-            headers={"Prefer": ",".join(prefer)},
-            data=json.dumps(rows),
-            timeout=120,
-        )
-        r.raise_for_status()
-        return r.json() if returning else None
-
-    def update(self, table: str, match: dict, body: dict) -> None:
-        r = self.session.patch(
-            f"{self.base}/{table}",
-            params=match,
-            headers={"Prefer": "return=minimal"},
-            data=json.dumps(body),
-            timeout=60,
-        )
-        r.raise_for_status()
 
 
 class FredError(Exception):
@@ -289,21 +227,13 @@ def ingest_series(db: Supabase, api_key: str, series: dict, backfill: bool) -> d
         for row in rows:
             row["vintage"] = LATEST_VINTAGE
     rows = compress(rows)
-    for i in range(0, len(rows), UPSERT_CHUNK):
-        db.insert("observations", rows[i:i + UPSERT_CHUNK],
-                  on_conflict="series_id,as_of,vintage")
+    db.upsert_observations(rows)
 
     attrs = check_metadata(api_key, series)
     db.update("series", {"id": f"eq.{series['id']}"}, {"attributes": attrs})
 
-    result = {
-        "rows": len(rows),
-        "missing": sum(r["quality_status"] == "missing" for r in rows),
-        "first": rows[0]["as_of"] if rows else None,
-        "last": max(r["as_of"] for r in rows) if rows else None,
-        "fred_units": attrs.get("fred_units"),
-        "catalog_unit": series.get("unit"),
-    }
+    result = summarize(rows)
+    result.update(fred_units=attrs.get("fred_units"), catalog_unit=series.get("unit"))
     if len(windows) > 1:
         result["windows"] = len(windows)
     if latest_only:
@@ -316,8 +246,7 @@ def ingest_series(db: Supabase, api_key: str, series: dict, backfill: bool) -> d
 # --------------------------------------------------------------------------- #
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Ingesta de FRED en Market Radar")
-    p.add_argument("--backfill", action="store_true",
-                   default=os.environ.get("INGEST_BACKFILL", "").lower() == "true",
+    p.add_argument("--backfill", action="store_true", default=env_flag("INGEST_BACKFILL"),
                    help="descargar todo el historial con todas sus vintages")
     p.add_argument("--series", default=os.environ.get("INGEST_SERIES", ""),
                    help="IDs internos separados por comas (vacío = todas las de FRED)")
@@ -327,47 +256,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     api_key = require_env("FRED_API_KEY")
-    db = Supabase(require_env("SUPABASE_URL"), require_env("SUPABASE_SERVICE_ROLE_KEY"))
-
-    params = {"select": "id,source_code,frequency,unit,attributes",
-              "source_id": f"eq.{SOURCE_ID}", "source_code": "not.is.null", "order": "id"}
-    catalog = db.select("series", params)
-    wanted = {s.strip() for s in args.series.split(",") if s.strip()}
-    if wanted:
-        unknown = wanted - {s["id"] for s in catalog}
-        if unknown:
-            print(f"Aviso: series no encontradas en el catálogo: {', '.join(sorted(unknown))}")
-        catalog = [s for s in catalog if s["id"] in wanted]
-    if not catalog:
-        print("No hay series de FRED que descargar.")
-        return 0
-
-    log = db.insert("provider_sync_logs", {"source_id": SOURCE_ID, "status": "running",
-                                           "notes": "backfill" if args.backfill else "incremental"},
-                    returning=True)[0]
-
-    results, errors = {}, {}
-    for s in catalog:
-        try:
-            results[s["id"]] = ingest_series(db, api_key, s, args.backfill)
-            r = results[s["id"]]
-            print(f"OK   {s['id']:<22} {r['rows']:>7} filas  {r['first']} → {r['last']}  "
-                  f"unidades FRED: {r['fred_units']}")
-        except Exception as exc:  # una serie que falla no detiene las demás
-            errors[s["id"]] = str(exc)[:500]
-            print(f"FAIL {s['id']:<22} {exc}")
-
-    status = "ok" if not errors else ("failed" if not results else "partial")
-    db.update("provider_sync_logs", {"id": f"eq.{log['id']}"}, {
-        "finished_at": now_utc().isoformat(),
-        "status": status,
-        "rows_imported": sum(r["rows"] for r in results.values()),
-        "error": json.dumps(errors, ensure_ascii=False) if errors else None,
-        "notes": json.dumps({"mode": "backfill" if args.backfill else "incremental",
-                             "series": results}, ensure_ascii=False),
-    })
-    print(f"Estado: {status}. Series correctas: {len(results)}, con error: {len(errors)}.")
-    return 1 if errors else 0
+    db = Supabase.from_env()
+    mode = "backfill" if args.backfill else "incremental"
+    return run_catalog(db, SOURCE_ID, mode, db.catalog(SOURCE_ID, args.series),
+                       lambda s: ingest_series(db, api_key, s, args.backfill))
 
 
 if __name__ == "__main__":

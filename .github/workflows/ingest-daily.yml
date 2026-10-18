@@ -1,0 +1,72 @@
+name: Ingesta diaria
+
+on:
+  schedule:
+    # 05:17 UTC (07:17 en París en horario de verano), de lunes a sábado.
+    - cron: "17 5 * * 1-6"
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Fuente a descargar"
+        type: choice
+        options: [todas, fred, tiingo, ecb]
+        default: todas
+      backfill:
+        description: "Descargar todo el historial desde 2020"
+        type: boolean
+        default: false
+      series:
+        description: "IDs internos separados por comas (vacío = todas las de la fuente)"
+        required: false
+        default: ""
+
+concurrency:
+  group: ingest-daily
+  cancel-in-progress: false
+
+env:
+  SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+  SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+  # Los parámetros del formulario se pasan como variables, nunca dentro del comando.
+  INGEST_BACKFILL: ${{ inputs.backfill }}
+  INGEST_SERIES: ${{ inputs.series }}
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false          # si una fuente falla, las demás siguen
+      matrix:
+        source: [fred, tiingo, ecb]
+    steps:
+      - name: Comprobar si toca esta fuente
+        id: pick
+        env:
+          WANTED: ${{ inputs.source || 'todas' }}
+          SOURCE: ${{ matrix.source }}
+        run: |
+          if [ "$WANTED" = "todas" ] || [ "$WANTED" = "$SOURCE" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.pick.outputs.run == 'true'
+
+      - uses: actions/setup-python@v5
+        if: steps.pick.outputs.run == 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        if: steps.pick.outputs.run == 'true'
+        run: pip install -r requirements.txt
+
+      - name: Descargar ${{ matrix.source }}
+        if: steps.pick.outputs.run == 'true'
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
+          SOURCE: ${{ matrix.source }}
+        run: python "ingest/${SOURCE}_ingest.py"
