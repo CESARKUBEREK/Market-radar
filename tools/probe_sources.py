@@ -100,30 +100,61 @@ def euronext(isin_mic: str) -> None:
 
 
 def imf() -> None:
-    """Reservas de oro (IRFCL, onzas troy) y deuda/PIB (WEO vía DataMapper)."""
+    """Reservas de oro (IRFCL, onzas troy) y deuda/PIB (WEO)."""
+    import csv
+    import io
+    import re
     gold = ("https://api.imf.org/external/sdmx/2.1/data/IRFCL/"
             "USA+DEU+ITA+FRA+CHN+RUS+IND+CHE+JPN.IRFCLDT1_IRFCL56V_FTO..M")
-    for accept in ("application/vnd.sdmx.data+csv;version=1.0.0", "text/csv"):
-        try:
-            r = requests.get(gold, params={"startPeriod": "2020-01"}, headers={**UA, "Accept": accept}, timeout=60)
-            lines = r.text.splitlines()
-            report(f"imf irfcl gold [{accept[:30]}]", r.ok and len(lines) > 2,
-                   f"HTTP {r.status_code}, {len(lines)} líneas; {' | '.join(lines[:3])[:600]}")
-            if r.ok and len(lines) > 2:
-                countries = sorted({l.split(',')[1] for l in lines[1:] if ',' in l})
-                last = lines[-1][:200]
-                report("imf irfcl gold países/último", True, f"{countries} | {last}")
-                break
-        except Exception as exc:
-            report("imf irfcl gold", False, str(exc)[:200])
     try:
-        r = requests.get("https://www.imf.org/external/datamapper/api/v1/GGXWDG_NGDP/"
-                         "JPN/GBR/USA/FRA/CHN/IND/ARG/RUS", headers=UA, timeout=60)
-        vals = r.json().get("values", {}).get("GGXWDG_NGDP", {})
-        detail = "; ".join(f"{c}: {min(v)}-{max(v)} ({v.get('2025')})" for c, v in vals.items())
-        report("imf datamapper deuda/PIB", bool(vals), f"HTTP {r.status_code}; {detail}"[:800])
+        r = requests.get(gold, params={"startPeriod": "2020-01"},
+                         headers={**UA, "Accept": "application/vnd.sdmx.data+csv;version=1.0.0"}, timeout=90)
+        rows = list(csv.DictReader(io.StringIO(r.text)))
+        keys = ["COUNTRY", "INDICATOR", "SECTOR", "FREQUENCY", "TIME_PERIOD", "OBS_VALUE", "SCALE",
+                "UNIT", "PUBLICATION_DATE", "UPDATE_DATE", "STATUS"]
+        report("imf irfcl fila", bool(rows), str({k: rows[0].get(k) for k in keys})[:800] if rows else r.text[:300])
+        by: dict = {}
+        for x in rows:
+            by.setdefault((x.get("COUNTRY"), x.get("SECTOR")), []).append(x)
+        for (c, sec), xs in sorted(by.items(), key=lambda kv: str(kv[0])):
+            xs.sort(key=lambda x: x["TIME_PERIOD"])
+            report(f"imf irfcl {c} {sec}", True,
+                   f"{len(xs)} obs, {xs[0]['TIME_PERIOD']}={xs[0]['OBS_VALUE']} … "
+                   f"{xs[-1]['TIME_PERIOD']}={xs[-1]['OBS_VALUE']} scale={xs[-1].get('SCALE')}")
     except Exception as exc:
-        report("imf datamapper deuda/PIB", False, str(exc)[:200])
+        report("imf irfcl", False, str(exc)[:200])
+
+    debt = [
+        ("datamapper", "https://www.imf.org/external/datamapper/api/v1/GGXWDG_NGDP/USA/JPN",
+         {"Accept": "application/json"}),
+        ("sdmx3 IMF.RES/WEO", "https://api.imf.org/external/sdmx/3.0/data/dataflow/IMF.RES/WEO/~/USA+JPN.GGXWDG_NGDP.A",
+         {"Accept": "text/csv"}),
+        ("sdmx21 WEO", "https://api.imf.org/external/sdmx/2.1/data/WEO/USA+JPN.GGXWDG_NGDP.A",
+         {"Accept": "application/vnd.sdmx.data+csv;version=1.0.0"}),
+    ]
+    for name, url, h in debt:
+        try:
+            r = requests.get(url, headers={**UA, **h}, timeout=60)
+            lines = r.text.splitlines()
+            report(f"imf deuda {name}", r.ok and len(lines) > 1,
+                   f"HTTP {r.status_code} {r.headers.get('content-type', '')[:40]}, {len(lines)} líneas; "
+                   + " | ".join(ln[:250] for ln in lines[:2]) + " || " + (lines[-1][:250] if lines else ""))
+        except Exception as exc:
+            report(f"imf deuda {name}", False, str(exc)[:200])
+    try:
+        r = requests.get("https://api.imf.org/external/sdmx/2.1/dataflow/all/all/latest",
+                         headers={**UA, "Accept": "application/xml"}, timeout=60)
+        tags = re.findall(r"<(?:str:|structure:)?Dataflow\b[^>]*>", r.text)
+        ids = []
+        for t in tags:
+            i = re.search(r'\bid="([^"]+)"', t)
+            a = re.search(r'agencyID="([^"]+)"', t)
+            if i:
+                ids.append(f"{a.group(1) if a else '?'}/{i.group(1)}")
+        hits = [x for x in ids if any(k in x.upper() for k in ("WEO", "GDD", "DEBT", "GFS", "FM", "HPDD"))]
+        report("imf dataflows", bool(ids), f"HTTP {r.status_code}, {len(ids)} flujos; relevantes: {hits[:40]}")
+    except Exception as exc:
+        report("imf dataflows", False, str(exc)[:200])
 
 
 def main() -> int:

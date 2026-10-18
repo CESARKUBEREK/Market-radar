@@ -15,10 +15,12 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - name: Tiingo
+        if: false
         env:
           TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
         run: python tools/probe_sources.py tiingo
       - name: Fuentes públicas
+        if: false
         run: python tools/probe_sources.py public
       - name: FMI
         run: python tools/probe_sources.py imf
