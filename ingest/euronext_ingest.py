@@ -7,7 +7,10 @@ acceso no documentado que podría cambiar. source_code = ISIN-MIC, por ejemplo
 
 Convenciones:
 - Se guarda la columna Close (cierre oficial), en la divisa de cotización.
-- Se pide por tramos de un año para no depender del límite de la descarga.
+- Euronext solo sirve los dos últimos años. Si la serie tiene
+  attributes.history_fallback = {"source": "yahoo", "code": "HO.PA"}, en el
+  backfill el tramo anterior se completa con Yahoo (fuente no oficial) y esas
+  filas se marcan en el registro. Los datos de Euronext tienen prioridad.
 - published_at = fecha de la sesión a las 18:00 hora de París. vintage = 1.
 
 Variables de entorno: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
@@ -28,6 +31,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from common import HISTORY_START, Supabase, env_flag, run_catalog, summarize
+import yahoo_ingest
 
 EURONEXT_URL = "https://live.euronext.com/en/ajax/AwlHistoricalPrice/getFullDownloadAjax"
 SOURCE_ID = "euronext"
@@ -82,9 +86,21 @@ def ingest_series(db: Supabase, series: dict, backfill: bool) -> dict:
                 rows[row["as_of"]] = row
         chunk_start = chunk_end + dt.timedelta(days=1)
         time.sleep(1)
+    filled = 0
+    fallback = (series.get("attributes") or {}).get("history_fallback") or {}
+    if backfill and fallback.get("source") == "yahoo":
+        first_official = min(rows) if rows else today.isoformat()
+        result = yahoo_ingest.yahoo_get(fallback["code"], start)
+        for row in yahoo_ingest.to_rows(series["id"], result):
+            if row["as_of"] < first_official and row["as_of"] not in rows:
+                rows[row["as_of"]] = row
+                filled += 1
     out = sorted(rows.values(), key=lambda r: r["as_of"])
     db.upsert_observations(out)
-    return summarize(out)
+    summary = summarize(out)
+    if filled:
+        summary["filled_from_yahoo"] = filled
+    return summary
 
 
 def parse_args() -> argparse.Namespace:
