@@ -59,14 +59,31 @@ def to_rows(series_id: str, result: dict) -> list[dict]:
     tz = ZoneInfo(result["meta"].get("exchangeTimezoneName") or "America/New_York")
     today = dt.datetime.now(tz).date()
     closes = result["indicators"]["quote"][0].get("close") or []
+    is_fx = result["meta"].get("instrumentType") == "CURRENCY" or \
+        str(result["meta"].get("symbol", "")).endswith("=X")
     rows: dict[str, dict] = {}
     for ts, close in zip(result.get("timestamp") or [], closes):
         day = dt.datetime.fromtimestamp(ts, tz).date()
-        if day >= today or day.isoformat() < HISTORY_START:
+        if day >= today:
             continue
         if close is None:
             # Yahoo devuelve velas vacías en días sin sesión: aperturas del domingo
             # (DX-Y.NYB), viernes de Tel Aviv antes de 2026, festivos. No son datos.
+            continue
+        if is_fx:
+            # En divisas (=X), la vela fechada D lleva el precio de la medianoche de
+            # Londres con la que empieza D, es decir, el cierre del día hábil anterior.
+            # Comprobado contra FRED H.10 y el DXY: el desfase de -1 día maximiza la
+            # correlación. La vela del lunes trae el viernes (más la apertura del
+            # domingo); la del sábado, si existe, trae el cierre real del viernes.
+            if day.weekday() == 6:
+                continue
+            back = 3 if day.weekday() == 0 else 1
+            target = day - dt.timedelta(days=back)
+            if day.weekday() == 0 and target.isoformat() in rows:
+                continue  # ya hay cierre del viernes desde la vela del sábado
+            day = target
+        if day.isoformat() < HISTORY_START:
             continue
         missing = False
         rows[day.isoformat()] = {
