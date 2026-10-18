@@ -40,6 +40,23 @@ Vistas en Supabase, todas deterministas (parámetros en `rule_versions`, id `der
 materializadas; cada ingesta las refresca al terminar con `refresh_analysis()`.
 Para añadir un par de correlación basta con insertar una fila en `analysis_pairs`.
 
+## Situaciones excepcionales (exceptional-v1.1)
+
+`report/exceptional.py` aplica reglas fijas antes del informe y guarda cada señal en `alerts`
+(`rule_id` exc_A … exc_E, `kind` informative). El análisis con IA las explica, pero no las crea.
+
+| Tipo | Qué detecta | Datos |
+| --- | --- | --- |
+| A. Posicionamiento extremo | Neta de fondos gestionados, apalancados o gestoras en percentil ≥ 95 o ≤ 5 de 5 años; cambio semanal ≥ 2,5 desviaciones | COT de la CFTC (`ingest/cftc_ingest.py`): oro, plata, cobre, WTI, S&P 500, Nasdaq-100, Russell 2000, bonos 2 y 10 años, euro, dólar, bitcoin CME |
+| B. Posible liquidación | Confirmada: liquidaciones de OKX ≥ 3 × su mediana. Compatible: caída de precio e interés abierto a la vez (BTC diario; futuros semanal) | OKX, COT |
+| C. Exceso de apalancamiento | Financiación de perpetuos BTC en percentil ≥ 90 con interés abierto al alza y precio estancado; en futuros, neta extrema con interés abierto alto | Deribit (desde 2020), OKX, Hyperliquid, COT |
+| D. Flujos de capital | Salidas netas persistentes en SPY, GLD o IBIT y precio perdiendo la media de 50 o el mínimo de 20 sesiones | Emisores (State Street; iShares desde oct. 2026). Flujo = Δ acciones × valor liquidativo, no volumen |
+| E. Movimiento anómalo | Dos o más de: movimiento ≥ 3 desv., volumen ≥ 3 × media, volatilidad doble, máximos o mínimos de 52 semanas, cruce de la media de 200; diferencial high yield | Precios, volumen de Tiingo, FRED |
+
+Limitaciones: el COT refleja posiciones del martes publicadas el viernes; las liquidaciones solo cubren OKX
+(Binance y Bybit bloquean las IP de GitHub); el interés abierto de OKX tiene unos 180 días de historial y el de
+Deribit e Hyperliquid se acumula desde octubre de 2026.
+
 ## Puesta en marcha
 
 Secretos del repositorio (**Settings → Secrets and variables → Actions**):
