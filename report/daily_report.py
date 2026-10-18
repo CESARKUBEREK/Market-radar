@@ -2,8 +2,9 @@
 """Informe diario de Market Radar: lo compone desde las vistas de Supabase,
 lo guarda en `daily_reports` y lo envía por correo con Gmail (SMTP).
 
-Todo el contenido es determinista: sale de las vistas y de las alertas ya
-calculadas. No interviene ninguna IA.
+Todo el contenido es determinista (vistas y alertas ya calculadas), salvo la
+sección «Análisis», que redacta Claude con la evidencia del propio informe y una
+búsqueda web acotada (ai_analysis.py). Sin ANTHROPIC_API_KEY esa sección se omite.
 
 Se envía de lunes a viernes. El sábado no se envía salvo con --force.
 
@@ -14,6 +15,7 @@ Variables de entorno:
   DASHBOARD_URL    opcional, enlace al dashboard
   REPORT_FORCE=true  enviar aunque sea fin de semana
   REPORT_DRY_RUN=true  componer y guardar, sin enviar
+  ANTHROPIC_API_KEY, ANALYSIS_MODEL, ANALYSIS_WEB_SEARCH  análisis con IA (opcional)
 """
 
 from __future__ import annotations
@@ -31,6 +33,8 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ingest"))
 from common import Supabase, env_flag, now_utc, require_env  # noqa: E402
+
+import ai_analysis  # noqa: E402
 
 PARIS = ZoneInfo("Europe/Paris")
 STALE_DAYS = 4          # un dato diario con más días de antigüedad se marca como atrasado
@@ -134,6 +138,15 @@ def load(db: Supabase, report_date: dt.date) -> dict:
             "select": "title,source_name,url,published_at,relevance",
             "published_at": f"gte.{(report_date - dt.timedelta(days=3)).isoformat()}",
             "relevance": "gte.50", "order": "relevance.desc,published_at.desc", "limit": "8"}),
+        "events_window": db.select("events_calendar", {
+            "select": "event_at,kind,notes,country_code",
+            "and": f"(event_at.gte.{(report_date - dt.timedelta(days=4)).isoformat()},"
+                   f"event_at.lte.{(report_date + dt.timedelta(days=8)).isoformat()})",
+            "order": "event_at", "limit": "100"}),
+        "news_ai": db.select("news", {
+            "select": "title,source_name,url,published_at,summary,relevance",
+            "published_at": f"gte.{(report_date - dt.timedelta(days=3)).isoformat()}",
+            "relevance": "gte.35", "order": "relevance.desc,published_at.desc", "limit": "20"}),
         "sync": db.select("provider_sync_logs", {
             "select": "source_id,status,started_at,error", "order": "started_at.desc", "limit": "30"}),
     }
@@ -142,7 +155,8 @@ def load(db: Supabase, report_date: dt.date) -> dict:
 # --------------------------------------------------------------------------- #
 # Composición
 # --------------------------------------------------------------------------- #
-def compose(data: dict, report_date: dt.date, dashboard_url: str) -> tuple[str, str, dict]:
+def compose(data: dict, report_date: dt.date, dashboard_url: str,
+            analysis: dict | None = None, analysis_error: str | None = None) -> tuple[str, str, dict]:
     summary = data["summary"]
     stale = sorted(s["instrument"] for s in summary if (s.get("days_since_last") or 0) > STALE_DAYS)
     latest_by_source: dict[str, dict] = {}
@@ -170,6 +184,13 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str) -> tuple[str, 
     if failed:
         lines.append(f'<span style="color:{RED}">Fuentes con errores en la última descarga: {esc(", ".join(failed))}.</span>')
     body = [section("Resumen", "".join(f'<p style="margin:4px 0;font-size:14px">{l}</p>' for l in lines))]
+
+    # Análisis con IA: hechos, interpretación e hipótesis
+    if analysis:
+        body.append(section("Análisis", ai_analysis.render(analysis)))
+    elif analysis_error:
+        body.append(section("Análisis", f'<p style="font-size:13px;color:{GREY}">El análisis con IA no está '
+                                        f"disponible hoy ({esc(analysis_error[:120])}).</p>"))
 
     # Alertas
     if recent_alerts:
@@ -260,6 +281,8 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str) -> tuple[str, 
                 + "".join(body) + footer + "</div></body></html>")
     content = {"movers": [m["instrument"] for m in movers], "alerts": len(recent_alerts),
                "stale": stale, "failed_sources": failed}
+    if analysis:
+        content["ai"] = {k: analysis[k] for k in ("model", "result", "dropped", "usage", "web_search")}
     return title, html_doc, content
 
 
@@ -360,7 +383,22 @@ def main() -> int:
 
     db = Supabase.from_env()
     data = load(db, report_date)
-    title, html_doc, content = compose(data, report_date, os.environ.get("DASHBOARD_URL", "").strip())
+    analysis, analysis_error = None, None
+    try:
+        analysis = ai_analysis.run(data, report_date)
+        if analysis:
+            u = analysis["usage"]
+            print(f"::notice::Análisis IA: {len(analysis['result']['hechos'])} hechos, "
+                  f"{len(analysis['result']['interpretaciones'])} interpretaciones, "
+                  f"{len(analysis['result']['hipotesis'])} hipótesis; descartados {len(analysis['dropped'])}; "
+                  f"tokens {u.get('input_tokens')}/{u.get('output_tokens')}, búsquedas {u.get('web_search_requests')}")
+        else:
+            print("Análisis IA desactivado: falta ANTHROPIC_API_KEY.")
+    except Exception as exc:          # el informe sale igual, sin análisis
+        analysis_error = str(exc)
+        print(f"::warning::Análisis IA no disponible: {analysis_error[:300]}")
+    title, html_doc, content = compose(data, report_date, os.environ.get("DASHBOARD_URL", "").strip(),
+                                       analysis, analysis_error)
     row = {"report_date": report_date.isoformat(), "generated_at": now_utc().isoformat(),
            "experimental": True, "content": content, "html": html_doc,
            "stale_sources": content["stale"], "status": "draft"}
