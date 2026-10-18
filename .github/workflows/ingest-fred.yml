@@ -1,0 +1,45 @@
+name: Ingesta FRED
+
+on:
+  schedule:
+    # 05:17 UTC (07:17 en París en horario de verano), de lunes a sábado.
+    - cron: "17 5 * * 1-6"
+  workflow_dispatch:
+    inputs:
+      backfill:
+        description: "Descargar todo el historial con todas sus vintages"
+        type: boolean
+        default: false
+      series:
+        description: "IDs internos separados por comas (vacío = todas las series de FRED)"
+        required: false
+        default: ""
+
+concurrency:
+  group: ingest-fred
+  cancel-in-progress: false
+
+jobs:
+  fred:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Descargar series de FRED
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Los parámetros del formulario se pasan como variables, nunca dentro del comando.
+          INGEST_BACKFILL: ${{ inputs.backfill }}
+          INGEST_SERIES: ${{ inputs.series }}
+        run: python ingest/fred_ingest.py
