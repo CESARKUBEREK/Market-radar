@@ -10,7 +10,8 @@ Convenciones:
 - source_code = símbolo de Yahoo. Se guarda el cierre sin ajustar.
 - La fecha de cada vela se calcula en la zona horaria de la bolsa que indica
   Yahoo. Se descarta la vela del día en curso, que puede estar incompleta.
-- Las velas vacías de sábado o domingo se descartan: no son sesiones.
+- Las velas sin cierre se descartan: Yahoo las emite en días sin sesión
+  (aperturas del domingo, viernes de Tel Aviv hasta 2026, festivos).
 - published_at se estima como la fecha de la vela a las 23:59 en la zona
   horaria de la bolsa. vintage = 1; si Yahoo corrige un cierre, se sobrescribe.
 
@@ -63,9 +64,11 @@ def to_rows(series_id: str, result: dict) -> list[dict]:
         day = dt.datetime.fromtimestamp(ts, tz).date()
         if day >= today or day.isoformat() < HISTORY_START:
             continue
-        missing = close is None
-        if missing and day.weekday() >= 5:
-            continue  # velas vacías de fin de semana (p. ej. la apertura del domingo en DX-Y.NYB)
+        if close is None:
+            # Yahoo devuelve velas vacías en días sin sesión: aperturas del domingo
+            # (DX-Y.NYB), viernes de Tel Aviv antes de 2026, festivos. No son datos.
+            continue
+        missing = False
         rows[day.isoformat()] = {
             "series_id": series_id,
             "as_of": day.isoformat(),
