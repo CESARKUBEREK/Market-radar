@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "ingest"))
 from common import Supabase, env_flag, now_utc, require_env  # noqa: E402
 
 import ai_analysis  # noqa: E402
+import market_context  # noqa: E402
 
 PARIS = ZoneInfo("Europe/Paris")
 STALE_DAYS = 4          # un dato diario con más días de antigüedad se marca como atrasado
@@ -385,6 +386,9 @@ def main() -> int:
     data = load(db, report_date)
     analysis, analysis_error = None, None
     try:
+        if os.environ.get("OPENAI_API_KEY", "").strip():
+            data["closes"] = market_context.load_closes(db)
+            data["macro"] = market_context.load_macro(db)
         analysis = ai_analysis.run(data, report_date)
         if analysis:
             u = analysis["usage"]
@@ -416,6 +420,8 @@ def main() -> int:
                                              f"{h['invalidacion']}) [{', '.join(h['se_apoya_en'])}]" for h in res["hipotesis"]]),
                               ("LIMITACIONES / DESCARTADO", res.get("limitaciones", []) + analysis["dropped"])):
             print(f"::notice::{title_}: " + " || ".join(items)[:3500])
+        print("::notice::PANORAMA: " + " || ".join(f"{p['instrument_id']}: {p['lectura']}"
+                                                for p in res.get("panorama", []))[:3900])
     if args.dry_run and already_sent:
         # Una prueba no sobrescribe el informe que ya se envió hoy.
         print("Prueba: el informe de hoy ya se envió; no se guarda el borrador.")

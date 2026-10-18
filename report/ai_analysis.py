@@ -36,6 +36,8 @@ import re
 import time
 
 import requests
+
+import market_context
 from zoneinfo import ZoneInfo
 
 API = "https://api.openai.com/v1/responses"
@@ -142,6 +144,22 @@ def build_evidence(data: dict, report_date: dt.date) -> dict:
                        "ya_ocurrido": e["event_at"][:10] < report_date.isoformat(),
                        "clase": EVENT_LABEL.get(e["kind"], e["kind"]), "texto": e.get("notes")}
 
+    # Tendencia e historia de cada instrumento (T) y contexto macro (X), calculados sin IA
+    closes = data.get("closes") or {}
+    info = {x["instrument_id"]: x for x in summary}
+    order = [i for i in market_context.CORE if i in closes] + sorted(i for i in closes if i not in market_context.CORE)
+    for iid in order:
+        series = closes[iid]
+        if len(series) < 210:
+            continue
+        meta = info.get(iid, {})
+        ctx = market_context.instrument_context(series, bool(meta.get("is_rate")))
+        ev[f"T_{iid}"] = {"tipo": "tendencia e historia (calculado)", "instrumento": meta.get("instrument", iid),
+                          "instrument_id": iid, "fuente": _source_of(meta.get("series_id", iid)), **ctx}
+    macro = market_context.macro_context(data.get("macro") or {}, closes, data.get("correlations") or [])
+    for k, v in macro.items():
+        ev[f"X_{k}"] = {"tipo": "contexto macro (calculado)", "datos": v}
+
     for i, n in enumerate((data.get("news_ai") or [])[:20], 1):
         ev[f"N{i}"] = {"tipo": "noticia oficial", "fecha": _paris(n["published_at"]), "fuente": n["source_name"],
                        "titular": n["title"], "resumen": (n.get("summary") or "")[:300], "url": n["url"]}
@@ -163,35 +181,50 @@ def _call(payload: dict, key: str) -> dict:
 
 
 STRUCTURE_SYSTEM = """Redactas la sección «Análisis» del informe diario de Market Radar, en español, para uso \
-personal. Separa estrictamente tres niveles:
+personal. Eres un analista macro y de mercados riguroso. Separa estrictamente estos niveles:
 
-HECHOS: qué ha ocurrido y qué fuentes lo confirman. Solo afirmaciones verificables en la evidencia (M, A, C, N, \
-P solo como descripción de movimientos). Cada hecho cita sus identificadores en «fuentes». \
-Cifras exactas tal como aparecen en la evidencia, con fecha. Un patrón P no es un hecho causal.
+EVIDENCIA disponible (identificadores entre corchetes, solo en las listas de fuentes):
+- M…: movimientos de la última sesión. T_<instrumento>: tendencia e historia desde 2020 calculadas sin IA \
+(variaciones a 1 semana-12 meses, distancia a las medias de 50 y 200 sesiones, último cruce de medias, \
+tendencia_calculada, máximos y mínimos con fecha, percentil del nivel desde 2020, régimen de volatilidad, rachas). \
+X_…: contexto macro (liquidez neta de la Fed, M2, fondos federales, NFCI, curva 2-10 años, correlaciones). \
+A: alertas. C: calendario. N: noticias oficiales. P: patrones de movimientos conjuntos detectados por reglas.
 
-INTERPRETACIONES: por qué podría ser relevante para el mercado. Usa condicional («podría», «es coherente con»). \
-Cada una se apoya en identificadores de hechos o evidencia. NO afirmes que una noticia provocó un movimiento salvo \
-que la propia noticia N lo diga expresamente; entonces atribúyelo («según …»). Sin esa evidencia, habla de \
-coincidencia temporal. Si varias explicaciones son posibles, \
-dilo. Indica la confianza: baja, media o alta.
+PANORAMA: una entrada por cada instrumento de la lista obligatoria que recibes, citando su T_<instrumento>. \
+En 1 o 2 frases: dirección y fuerza de la tendencia (usa la tendencia_calculada, no la contradigas), dónde está el \
+nivel en perspectiva histórica (percentil desde 2020, distancia al máximo o mínimo, con fechas), momento reciente \
+(1 y 3 meses) y volatilidad si es anómala. Para tipos, en puntos básicos.
 
-HIPÓTESIS: consecuencias posibles si se cumplen condiciones observables. Formato «si … entonces …», con \
-horizonte temporal y qué la invalidaría. Vincúlalas a eventos del calendario (C) cuando existan.
+HECHOS: lo más relevante de la sesión y del contexto, solo afirmaciones verificables en la evidencia, con cifras \
+y fechas. Incluye comparaciones históricas (p. ej. «el oro está en el percentil 98 desde 2020»). Cada hecho cita \
+sus identificadores. Un patrón P no es un hecho causal.
 
-Además, en «limitaciones», señala lo que no se ha podido confirmar o las fuentes que faltan.
-Nada de recomendaciones de compra o venta. Máximo 6 hechos, 4 interpretaciones y 3 hipótesis. Frases cortas.
+INTERPRETACIONES: por qué podría ser relevante. Condicional («podría», «es coherente con»). Cruza activos y macro: \
+rendimientos y dólar frente a oro y bitcoin, petróleo e inflación, curva y ciclo, liquidez y activos de riesgo, \
+correlaciones que se salen de su rango. NO afirmes que una noticia provocó un movimiento salvo que la propia \
+noticia N lo diga; si no, habla de coincidencia temporal. Si hay varias explicaciones, dilo. Confianza: baja, \
+media o alta.
 
-Estilo: números en formato español (coma decimal, punto de miles), con 2 decimales como máximo en precios y \
-porcentajes y los tipos en puntos básicos (pb). Fechas como «16/10». No uses nombres técnicos de campos \
-(«desviaciones_tipicas_dia», «M3»…) dentro del texto: los identificadores van solo en las listas de fuentes. \
-Un movimiento con más de 2 desviaciones típicas puede describirse como «inusualmente amplio». \
+HIPÓTESIS: consecuencias posibles si se cumplen condiciones observables y medibles (niveles, medias, datos del \
+calendario). Formato condición → consecuencia, con horizonte y qué la invalidaría.
+
+LIMITACIONES: lo que la evidencia no permite confirmar.
+
+Nada de recomendaciones de compra o venta. Máximo 8 hechos, 5 interpretaciones y 4 hipótesis.
+
+Estilo: frases cortas; números en formato español (coma decimal, punto de miles), 2 decimales como máximo; tipos \
+en pb; fechas como «16/10» o «mar. 2022». No escribas nombres de campos ni identificadores dentro del texto. \
 En las hipótesis, el campo «si» empieza directamente por la condición, sin la palabra «si»."""
 
 SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["hechos", "interpretaciones", "hipotesis", "limitaciones"],
+    "required": ["panorama", "hechos", "interpretaciones", "hipotesis", "limitaciones"],
     "properties": {
+        "panorama": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False, "required": ["instrument_id", "lectura", "fuentes"],
+            "properties": {"instrument_id": {"type": "string"}, "lectura": {"type": "string"},
+                           "fuentes": {"type": "array", "items": {"type": "string"}}}}},
         "hechos": {"type": "array", "items": {
             "type": "object", "additionalProperties": False, "required": ["texto", "fuentes"],
             "properties": {"texto": {"type": "string"}, "fuentes": {"type": "array", "items": {"type": "string"}}}}},
@@ -213,10 +246,12 @@ SCHEMA = {
 
 def structure(evidence: dict, model: str, key: str, effort: str) -> tuple[dict, dict]:
     payload = {"model": model, "instructions": STRUCTURE_SYSTEM,
-               "input": json.dumps({"evidencia": evidence}, ensure_ascii=False),
+               "input": json.dumps({"instrumentos_obligatorios_en_panorama":
+                                    [k[2:] for k in evidence if k.startswith("T_") and k[2:] in market_context.CORE],
+                                    "evidencia": evidence}, ensure_ascii=False),
                "text": {"format": {"type": "json_schema", "name": "analisis_diario", "strict": True,
                                    "schema": SCHEMA}},
-               "max_output_tokens": 6000}
+               "max_output_tokens": 12000}
     if effort and effort != "none":
         payload["reasoning"] = {"effort": effort}
     resp = _call(payload, key)
@@ -233,12 +268,41 @@ def structure(evidence: dict, model: str, key: str, effort: str) -> tuple[dict, 
     return json.loads(text), resp.get("usage") or {}
 
 
-def validate(result: dict, known: set[str]) -> tuple[dict, list[str]]:
+def _fallback_reading(t: dict) -> str:
+    """Lectura mínima generada por código cuando la IA omite un instrumento obligatorio."""
+    u = t.get("unidad_variaciones", "%")
+    return (f"Tendencia {t['tendencia_calculada']}; {t.get(f'variacion_3_meses_{u}')} {u} en 3 meses, "
+            f"{t.get(f'distancia_a_media_200_{u}')} {u} frente a la media de 200 sesiones; percentil "
+            f"{t['percentil_del_nivel_desde_2020']} desde 2020 (texto automático).")
+
+
+def validate(result: dict, known: set[str], evidence: dict | None = None) -> tuple[dict, list[str]]:
     """Descarta lo que no cita evidencia existente. Devuelve el resultado limpio y lo descartado."""
     dropped = []
+    evidence = evidence or {}
 
     def ok_refs(refs: list[str]) -> list[str]:
         return [r for r in refs if r in known]
+
+    # Panorama: una entrada por instrumento obligatorio, con su T_ y la tendencia calculada por código
+    panorama, seen = [], set()
+    for p in result.get("panorama", []):
+        iid = p.get("instrument_id", "")
+        tid = f"T_{iid}"
+        if tid not in evidence or iid in seen:
+            dropped.append(f"panorama sin datos: {iid}")
+            continue
+        seen.add(iid)
+        refs = ok_refs(p.get("fuentes", [])) or [tid]
+        if tid not in refs:
+            refs.insert(0, tid)
+        panorama.append({"instrument_id": iid, "lectura": p.get("lectura", ""), "fuentes": refs})
+    for k, t in evidence.items():
+        if k.startswith("T_") and t["instrument_id"] in market_context.CORE and t["instrument_id"] not in seen:
+            panorama.append({"instrument_id": t["instrument_id"], "lectura": _fallback_reading(t), "fuentes": [k]})
+            dropped.append(f"panorama completado por código: {t['instrument_id']}")
+    rank = {iid: i for i, iid in enumerate(market_context.CORE)}
+    panorama.sort(key=lambda p: rank.get(p["instrument_id"], 99))
 
     hechos = []
     for h in result.get("hechos", []):
@@ -261,7 +325,7 @@ def validate(result: dict, known: set[str]) -> tuple[dict, list[str]]:
             hyp.append({**hp, "se_apoya_en": refs})
         else:
             dropped.append(f"hipótesis sin apoyo: {hp.get('si', '')[:80]}")
-    return {"hechos": hechos, "interpretaciones": interp, "hipotesis": hyp,
+    return {"panorama": panorama, "hechos": hechos, "interpretaciones": interp, "hipotesis": hyp,
             "limitaciones": result.get("limitaciones", [])}, dropped
 
 
@@ -271,10 +335,10 @@ def run(data: dict, report_date: dt.date) -> dict | None:
     if not key:
         return None
     model = os.environ.get("ANALYSIS_MODEL", "").strip() or DEFAULT_MODEL
-    effort = os.environ.get("ANALYSIS_EFFORT", "").strip() or "low"
+    effort = os.environ.get("ANALYSIS_EFFORT", "").strip() or "medium"
     evidence = build_evidence(data, report_date)
     result, usage = structure(evidence, model, key, effort)
-    clean, dropped = validate(result, set(evidence))
+    clean, dropped = validate(result, set(evidence), evidence)
     return {"model": model, "result": clean, "dropped": dropped, "sources": evidence,
             "usage": {"input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens")},
             "web_search": False}
@@ -294,6 +358,10 @@ def _refs_html(refs: list[str], sources: dict) -> str:
             parts.append(f'<a href="{_esc(s["url"])}" style="color:#6e7781">{_esc(r)} {_esc(label)[:40]}</a>')
         elif s.get("tipo") == "dato de mercado":
             parts.append(f'{_esc(r)} {_esc(s.get("instrumento"))} ({_esc(s.get("fuente"))}, {_esc(s.get("fecha_cierre"))})')
+        elif s.get("tipo") == "tendencia e historia (calculado)":
+            parts.append(f'histórico {_esc(s.get("instrumento"))} ({_esc(s.get("fuente"))})')
+        elif s.get("tipo") == "contexto macro (calculado)":
+            parts.append(f'macro {_esc(r[2:].replace("_", " "))}')
         elif s.get("tipo") == "evento de calendario":
             parts.append(f'{_esc(r)} calendario {_esc(s.get("fecha", "")[:10])}')
         else:
@@ -321,6 +389,30 @@ def render(analysis: dict) -> str:
                 f'<ul style="margin:0;padding-left:18px">{lis}</ul>')
 
     hechos = [_esc(h["texto"]) + _refs_html(h["fuentes"], src) for h in res["hechos"]]
+    colors = {"alcista": "#1a7f37", "bajista": "#cf222e"}
+    rows = []
+    for p in res.get("panorama", []):
+        t = src.get(f"T_{p['instrument_id']}", {})
+        u = t.get("unidad_variaciones", "%")
+        trend = t.get("tendencia_calculada", "")
+
+        def fmt(x):
+            return "—" if x is None else f"{x:+.1f}".replace(".", ",") + (" pb" if u == "pb" else " %")
+        key = (f"3 m: {fmt(t.get(f'variacion_3_meses_{u}'))} · MM200: {fmt(t.get(f'distancia_a_media_200_{u}'))}"
+               f" · pct. {t.get('percentil_del_nivel_desde_2020', '—')}")
+        rows.append(f'<tr><td style="padding:4px 6px;font-size:13px;border-bottom:1px solid #eaeef2;white-space:nowrap">'
+                    f'<b>{_esc(t.get("instrumento", p["instrument_id"]))}</b><br>'
+                    f'<span style="color:{colors.get(trend, "#6e7781")};font-size:12px">{_esc(trend)}</span></td>'
+                    f'<td style="padding:4px 6px;font-size:13px;border-bottom:1px solid #eaeef2">{_esc(p["lectura"])}'
+                    f'<br><span style="color:#6e7781;font-size:11px">{_esc(key)}</span></td></tr>')
+    panorama_html = ""
+    if rows:
+        panorama_html = ('<p style="margin:10px 0 2px;font-weight:600;color:#1f2328;font-size:14px">Panorama: '
+                         'tendencia y contexto histórico (desde 2020)</p>'
+                         '<p style="margin:0 0 4px;font-size:11px;color:#6e7781">Tendencia calculada por regla fija: '
+                         'alcista si el precio y la media de 50 sesiones están por encima de la de 200 y la de 50 '
+                         'sube; bajista al revés. «pct.» = percentil del nivel actual desde 2020.</p>'
+                         f'<table style="border-collapse:collapse;width:100%">{"".join(rows)}</table>')
     interp = [f'{_esc(i["texto"])} <span style="color:#6e7781;font-size:12px">(confianza {_esc(i["confianza"])})</span>'
               + _refs_html(i["se_apoya_en"], src) for i in res["interpretaciones"]]
     hyp = [f'<b>Si</b> {_esc(_no_si(h["si"]))}, <b>entonces</b> {_esc(h["entonces"])} '
@@ -328,7 +420,7 @@ def render(analysis: dict) -> str:
            f'Se invalida si: {_esc(h["invalidacion"])}.</span>' + _refs_html(h["se_apoya_en"], src)
            for h in res["hipotesis"]]
     lim = [_esc(x) for x in res.get("limitaciones", [])]
-    return (label + block("Hechos: qué ha ocurrido y qué lo confirma", "#1f2328", hechos)
+    return (label + block("Hechos: qué ha ocurrido y qué lo confirma", "#1f2328", hechos) + panorama_html
             + block("Interpretación: por qué podría importar", "#0550ae", interp)
             + block("Hipótesis: qué podría pasar y bajo qué condiciones", "#8250df", hyp)
             + block("Limitaciones", "#6e7781", lim))

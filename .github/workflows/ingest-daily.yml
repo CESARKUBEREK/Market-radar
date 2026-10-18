@@ -100,7 +100,7 @@ jobs:
           REPORT_TO: ${{ secrets.REPORT_TO }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANALYSIS_MODEL: ${{ vars.ANALYSIS_MODEL || 'gpt-5.4-mini' }}
-          ANALYSIS_EFFORT: ${{ vars.ANALYSIS_EFFORT || 'low' }}
+          ANALYSIS_EFFORT: ${{ vars.ANALYSIS_EFFORT || 'medium' }}
           DASHBOARD_URL: ${{ vars.DASHBOARD_URL || 'https://market-radar-pink.vercel.app' }}
           REPORT_FORCE: ${{ github.event_name == 'workflow_dispatch' }}
           REPORT_DRY_RUN: ${{ inputs.report_dry_run }}
