@@ -179,7 +179,7 @@ def deribit_funding(backfill: bool) -> list[dict]:
     cur = start
     t0 = time.monotonic()
     while cur < now_utc():
-        if time.monotonic() - t0 > 300:
+        if time.monotonic() - t0 > 300 and now_utc() - cur > dt.timedelta(days=2):
             print(f"::warning::Deribit: historial de financiación cortado en {cur.date()} por tiempo; "
                   "se completará en próximas cargas")
             break
