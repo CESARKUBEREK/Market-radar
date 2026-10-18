@@ -268,10 +268,10 @@ def _crypto(_json) -> None:
 
 def _etf() -> None:
     etf = {
+        "spy ssga navhist": "https://www.ssga.com/us/en/intermediary/library-content/products/fund-data/etfs/us/navhist-us-en-spy.xlsx",
         "gld ssga navhist": "https://www.ssga.com/us/en/intermediary/library-content/products/fund-data/etfs/us/navhist-us-en-gld.xlsx",
         "ibit xls": "https://www.ishares.com/us/products/333011/ishares-bitcoin-trust-etf/1467271812596.ajax?fileType=xls&fileName=iShares-Bitcoin-Trust-ETF_fund&dataType=fund",
         "iau xls": "https://www.ishares.com/us/products/239561/ishares-gold-trust-fund/1467271812596.ajax?fileType=xls&fileName=iShares-Gold-Trust_fund&dataType=fund",
-        "qqq invesco": "https://www.invesco.com/us/financial-products/etfs/holdings/main/holdings/0?audienceType=Investor&action=download&ticker=QQQ",
     }
     for name, url in etf.items():
         try:
@@ -282,9 +282,8 @@ def _etf() -> None:
                 import re as _re
                 t = r.content.decode("utf-8", "ignore")
                 sheets = _re.findall(r'ss:Name="([^"]+)"', t)
-                hist = t[t.find("Historical"):][:3000]
-                cells = _re.findall(r"<ss:Data[^>]*>([^<]*)</ss:Data>", hist)
-                body = f"hojas {sheets}; histórico: {cells[:24]}"
+                i = t.find("Shares Outstanding")
+                body = f"hojas {sheets}; len {len(t)}; inicio {t[:200]!r}; SO@{i}: {t[max(0, i - 300):i + 600]!r}"
             if url.endswith(".xlsx") and r.ok:
                 import io as _io
                 try:
