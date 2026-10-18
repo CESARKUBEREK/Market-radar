@@ -236,7 +236,8 @@ FUENTES: cada elemento de «fuentes» y «se_apoya_en» es un identificador EXAC
 aparece como clave («M3», «T_gold», «X_m2», «S1», «C2»…). Nunca lo dejes vacío. Lo que no puedas apoyar en un \
 identificador, no lo escribas.
 
-Nada de recomendaciones de compra o venta. Máximo 8 hechos, 5 interpretaciones y 4 hipótesis.
+Nada de recomendaciones de compra o venta. Máximo 8 hechos, 5 interpretaciones y 4 hipótesis; cada lectura \
+de situación o de panorama, 2 frases como máximo.
 
 Estilo: frases cortas; números en formato español (coma decimal, punto de miles), 2 decimales como máximo. \
 Los NIVELES de tipos (US10Y, US02Y, fondos federales) van en % con 2 decimales («5,10 %»); sus VARIACIONES y \
@@ -283,7 +284,7 @@ def structure(evidence: dict, model: str, key: str, effort: str) -> tuple[dict, 
                                     "evidencia": evidence}, ensure_ascii=False),
                "text": {"format": {"type": "json_schema", "name": "analisis_diario", "strict": True,
                                    "schema": SCHEMA}},
-               "max_output_tokens": 12000}
+               "max_output_tokens": 32000}
     if effort and effort != "none":
         payload["reasoning"] = {"effort": effort}
     resp = _call(payload, key)

@@ -302,7 +302,7 @@ EXC_TYPES = {"A": "Posicionamiento extremo", "B": "Posible liquidación", "C": "
 def compose_exceptional(signals: list[dict]) -> str:
     if not signals:
         return section("Situaciones excepcionales", f'<p style="font-size:13px;color:{GREY}">Ninguna hoy según las '
-                                                     "reglas exceptional-v1.0.</p>")
+                                                     "reglas exceptional-v1.1.</p>")
     rows = []
     for s in signals[:15]:
         color = RED if s["severidad"] == "alta" else "#9a6700"
@@ -311,7 +311,7 @@ def compose_exceptional(signals: list[dict]) -> str:
                      f'<b>{esc(s["titulo"])}</b><br><span style="font-size:12px">{esc(s["detalle"])}</span>'
                      f'<br><span style="font-size:11px;color:{GREY}">Fuente: {esc(", ".join(s["fuentes"]))} · '
                      f'dato del {esc(s["fecha_dato"][:10])}</span>'])
-    note = (f'<p style="font-size:11px;color:{GREY};margin:6px 0 0">Reglas fijas (exceptional-v1.0). «Compatible con» '
+    note = (f'<p style="font-size:11px;color:{GREY};margin:6px 0 0">Reglas fijas (exceptional-v1.1). «Compatible con» '
             "indica un patrón coherente con esa situación, no su confirmación. El COT refleja posiciones del martes, "
             "publicadas el viernes.</p>")
     return section("Situaciones excepcionales", table(["Tipo", "Señal"], rows, align_right_from=99) + note)

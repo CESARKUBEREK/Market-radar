@@ -1,7 +1,7 @@
-"""Detector de situaciones excepcionales (reglas fijas, sin IA). Versión exceptional-v1.0.
+"""Detector de situaciones excepcionales (reglas fijas, sin IA). Versión exceptional-v1.1.
 
 A. Posicionamiento extremo (COT de la CFTC): posición neta de fondos gestionados, fondos
-   apalancados o gestoras en percentiles extremos de los últimos 5 años, o un cambio semanal
+   apalancados o gestoras en percentil ≥ 95 o ≤ 5 de los últimos 5 años, o un cambio semanal
    inusual. No anticipa la dirección del precio: indica sensibilidad a noticias.
 B. Posible liquidación de posiciones:
    - «confirmada por fuente» solo si OKX publica liquidaciones muy por encima de lo normal
@@ -27,7 +27,7 @@ import datetime as dt
 import math
 import statistics
 
-VERSION = "exceptional-v1.0"
+VERSION = "exceptional-v1.1"
 PAGE = 1000
 COT_LABEL = {"mm": "fondos gestionados", "lf": "fondos apalancados", "am": "gestoras"}
 NAMES = {"gold": "Oro", "silver": "Plata", "copper": "Cobre", "wti": "Petróleo WTI", "spx": "S&P 500",
@@ -130,14 +130,14 @@ def cot_signals(cot: dict, closes: dict, overview: list | None = None) -> list[d
         src = [f"CFTC COT ({'desagregado' if grp == 'mm' else 'TFF'})"]
         if overview is not None:
             overview.append({"instrumento": inst, "categoria": who, **metr})
-        if p >= 90 or p <= 10:
+        if p >= 95 or p <= 5:
             side = "larga" if last > 0 else "corta"
-            extreme = "máximo" if p >= 90 else "mínimo"
+            extreme = "máximo" if p >= 95 else "mínimo"
             out.append(sig("A", inst, f"{name}: posicionamiento de {who} en percentil {p} ({extreme} de {years:g} años)",
                            f"Posición neta {side} de {fmt(abs(last))} contratos al {last_d}, percentil {p} de los últimos "
                            f"{years:g} años. No anticipa la dirección del precio: indica una exposición poco habitual que "
                            "puede aumentar la sensibilidad a noticias y movimientos de precio.",
-                           "dato publicado", "alta" if p >= 95 or p <= 5 else "atención", src, last_d, metr,
+                           "dato publicado", "alta" if p >= 98 or p <= 2 else "atención", src, last_d, metr,
                            f"cftc_{inst}_{grp}_long"))
         if abs(z) >= 2.5:
             out.append(sig("A", inst, f"{name}: cambio semanal inusual del posicionamiento de {who}",
@@ -161,7 +161,7 @@ def cot_signals(cot: dict, closes: dict, overview: list | None = None) -> list[d
                                "Es compatible con recompra de cortos, sin confirmación de cierres forzosos.",
                                "compatible con", "atención", src, last_d, metr, f"cftc_{inst}_oi"))
         # C futuros: posición especulativa e interés abierto ambos altos
-        if grp in ("mm", "lf") and oi_p is not None and oi_p >= 90 and (p >= 90 or p <= 10):
+        if grp in ("mm", "lf") and oi_p is not None and oi_p >= 90 and (p >= 95 or p <= 5):
             out.append(sig("C", inst, f"{name}: posición de {who} extrema con interés abierto en percentil {oi_p}",
                            "Posicionamiento concentrado y mercado muy cargado de contratos: vulnerable a movimientos "
                            "bruscos si se deshacen posiciones. No demuestra que vaya a ocurrir.",
@@ -368,7 +368,7 @@ def detect(db, closes: dict, rates: set[str]) -> tuple[list[dict], list[dict]]:
 
 
 RULE_PARAMS = {
-    "A": "COT: neta (largas − cortas) en percentil ≥ 90 o ≤ 10 de 5 años (≥ 95/≤ 5 = alta), o cambio semanal ≥ 2,5 desv.",
+    "A": "COT: neta (largas − cortas) en percentil ≥ 95 o ≤ 5 de 5 años (≥ 98/≤ 2 = alta), o cambio semanal ≥ 2,5 desv.",
     "B": "OKX liquidaciones ≥ 3 × mediana 30 d y ≥ 5 M USD (confirmado); BTC −4 % y OI OKX −5 % en un día; COT: "
          "precio ±3 % (10 pb en bonos), OI −5 % y neta en la dirección del cierre (compatible)",
     "C": "Financiación 7 d en percentil ≥ 90 con OI +5 % en 7 d y precio |7 d| < 3 %; o percentil ≥ 95/≤ 5; "
