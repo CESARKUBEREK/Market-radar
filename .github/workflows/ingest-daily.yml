@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       source:
-        description: "Fuente a descargar"
+        description: "Fuente a descargar (ninguna = solo informe)"
         type: choice
-        options: [todas, fred, tiingo, ecb, yahoo, euronext]
+        options: [todas, fred, tiingo, ecb, yahoo, euronext, ninguna]
         default: todas
       backfill:
         description: "Descargar todo el historial desde 2020"
@@ -19,6 +19,14 @@ on:
         description: "IDs internos separados por comas (vacío = todas las de la fuente)"
         required: false
         default: ""
+      report:
+        description: "Generar y enviar el informe diario al terminar"
+        type: boolean
+        default: false
+      report_dry_run:
+        description: "Informe sin enviar (solo guardarlo en daily_reports)"
+        type: boolean
+        default: false
 
 concurrency:
   group: ingest-daily
@@ -70,3 +78,26 @@ jobs:
           TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
           SOURCE: ${{ matrix.source }}
         run: python "ingest/${SOURCE}_ingest.py"
+
+  report:
+    # Tras la ingesta programada (el script no envía en fin de semana) o si se pide a mano.
+    needs: ingest
+    if: ${{ always() && (github.event_name == 'schedule' || inputs.report) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Informe diario
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          REPORT_TO: ${{ secrets.REPORT_TO }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+          REPORT_FORCE: ${{ github.event_name == 'workflow_dispatch' }}
+          REPORT_DRY_RUN: ${{ inputs.report_dry_run }}
+        run: python report/daily_report.py
