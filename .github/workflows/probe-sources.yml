@@ -23,6 +23,11 @@ jobs:
         if: false
         run: python tools/probe_sources.py public
       - name: FMI
+        if: false
         env:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: python tools/probe_sources.py imf
+      - name: Calendario y noticias
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: python tools/probe_sources.py events

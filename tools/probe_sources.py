@@ -170,6 +170,54 @@ def imf() -> None:
         report("imf dataflows", False, str(exc)[:200])
 
 
+def events() -> None:
+    """Calendario (fechas de publicación de FRED, reuniones del BCE) y fuentes RSS de noticias."""
+    import re
+    key = os.environ.get("FRED_API_KEY", "").strip()
+    try:
+        r = requests.get("https://api.stlouisfed.org/fred/releases/dates", params={
+            "api_key": key, "file_type": "json", "realtime_start": date.today().isoformat(),
+            "realtime_end": (date.today() + timedelta(days=70)).isoformat(),
+            "include_release_dates_with_no_data": "true", "limit": 1000, "sort_order": "asc"}, timeout=60)
+        ds = r.json().get("release_dates", [])
+        wanted = re.compile(r"Consumer Price|Employment Situation|FOMC|Gross Domestic|Personal Income|"
+                            r"Producer Price|Retail|H\.4\.1|Job Openings|Unemployment Insurance", re.I)
+        seen: dict = {}
+        for d in ds:
+            if wanted.search(d.get("release_name", "")):
+                seen.setdefault((d["release_id"], d["release_name"]), []).append(d["date"])
+        report("fred release dates", bool(seen), " | ".join(f"{i} {n[:35]}: {v[:3]}" for (i, n), v in sorted(seen.items())))
+    except Exception as exc:
+        report("fred release dates", False, str(exc)[:200])
+    try:
+        r = requests.get("https://www.ecb.europa.eu/press/calendars/mgcgc/html/index.en.html", headers=UA, timeout=60)
+        txt = re.sub(r"<[^>]+>", " ", r.text)
+        hits = re.findall(r"(\d{2}/\d{2}/\d{4})\s+([^\n]{0,80}?monetary policy[^\n]{0,60})", txt, re.I)
+        report("ecb calendario reuniones", r.ok and bool(hits), f"HTTP {r.status_code}; {len(hits)}: "
+               + " | ".join(f"{d} {re.sub(r'\\s+', ' ', t)[:70]}" for d, t in hits[:6]))
+    except Exception as exc:
+        report("ecb calendario reuniones", False, str(exc)[:200])
+    feeds = {
+        "fed": "https://www.federalreserve.gov/feeds/press_all.xml",
+        "ecb": "https://www.ecb.europa.eu/rss/press.html",
+        "bls": "https://www.bls.gov/feed/bls_latest.rss",
+        "imf": "https://www.imf.org/en/News/RSS?Language=ENG",
+        "sec-rtx": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0000101829&type=8-K&dateb=&owner=include&count=10&output=atom",
+        "boe": "https://www.bankofengland.co.uk/rss/news",
+    }
+    sec_ua = {"User-Agent": "market-radar personal research ohlala-radar@example.com"}
+    for name, url in feeds.items():
+        try:
+            r = requests.get(url, headers=sec_ua if name.startswith("sec") else UA, timeout=60)
+            items = re.findall(r"<(?:item|entry)\b", r.text)
+            titles = re.findall(r"<title[^>]*>(?:<!\[CDATA\[)?([^<\]]{5,120})", r.text)[1:3]
+            dates = re.findall(r"<(?:pubDate|updated|dc:date)>([^<]+)<", r.text)[:1]
+            report(f"rss {name}", r.ok and bool(items), f"HTTP {r.status_code} {r.headers.get('content-type', '')[:30]}, "
+                   f"{len(items)} entradas; {titles} {dates}")
+        except Exception as exc:
+            report(f"rss {name}", False, str(exc)[:200])
+
+
 def main() -> int:
     group = sys.argv[1] if len(sys.argv) > 1 else "tiingo"
     if group == "tiingo":
@@ -178,6 +226,8 @@ def main() -> int:
         tiingo_fx_history("xauusd")
     elif group == "imf":
         imf()
+    elif group == "events":
+        events()
     elif group == "public":
         euronext("FR0000121329-XPAR")
     return 0
