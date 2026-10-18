@@ -143,7 +143,8 @@ def okx_liquidations() -> list[dict]:
     cutoff = int((now_utc() - dt.timedelta(hours=24)).timestamp() * 1000)
     longs = shorts = 0.0
     after, pages, complete = None, 0, False
-    while pages < 60:
+    t0 = time.monotonic()
+    while pages < 60 and time.monotonic() - t0 < 120:
         params = {"instType": "SWAP", "uly": "BTC-USDT", "state": "filled", "limit": 100}
         if after:
             params["after"] = after
@@ -176,11 +177,20 @@ def deribit_funding(backfill: bool) -> list[dict]:
         else now_utc() - dt.timedelta(days=10)
     rates: dict[dt.date, list[float]] = {}
     cur = start
+    t0 = time.monotonic()
     while cur < now_utc():
+        if time.monotonic() - t0 > 300:
+            print(f"::warning::Deribit: historial de financiación cortado en {cur.date()} por tiempo; "
+                  "se completará en próximas cargas")
+            break
         end = min(cur + dt.timedelta(days=30), now_utc())
-        res = get("https://www.deribit.com/api/v2/public/get_funding_rate_history", params={
-            "instrument_name": "BTC-PERPETUAL", "start_timestamp": int(cur.timestamp() * 1000),
-            "end_timestamp": int(end.timestamp() * 1000)}).json()["result"]
+        t1 = time.monotonic()
+        res = requests.get("https://www.deribit.com/api/v2/public/get_funding_rate_history", headers=UA, timeout=30,
+                           params={"instrument_name": "BTC-PERPETUAL", "start_timestamp": int(cur.timestamp() * 1000),
+                                   "end_timestamp": int(end.timestamp() * 1000)})
+        res.raise_for_status()
+        res = res.json()["result"]
+        print(f"Deribit {cur.date()}: {len(res)} registros en {time.monotonic() - t1:.1f} s")
         for d in res:
             rates.setdefault(utc_day(d["timestamp"]), []).append(float(d["interest_8h"]))
         cur = end
@@ -292,10 +302,10 @@ def main() -> int:
     log_id = db.start_log(SOURCE, mode)
     results, errors = {}, {}
     jobs = {
-        "okx_oi": okx_oi, "okx_funding": okx_funding, "okx_liquidaciones": okx_liquidations,
-        "deribit_funding": lambda: deribit_funding(backfill), "snapshots": snapshots,
         "spy": lambda: ssga("SPY", backfill), "gld": lambda: ssga("GLD", backfill), "ibit": lambda: ibit(db),
-        "volumen": lambda: volumes(backfill, key),
+        "volumen": lambda: volumes(backfill, key), "snapshots": snapshots,
+        "okx_oi": okx_oi, "okx_funding": okx_funding, "deribit_funding": lambda: deribit_funding(backfill),
+        "okx_liquidaciones": okx_liquidations,
     }
     for name, job in jobs.items():
         try:
