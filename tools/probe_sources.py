@@ -54,6 +54,18 @@ def tiingo_fx(pair: str) -> None:
         report(f"tiingo fx {pair}", False, str(exc)[:200])
 
 
+def tiingo_fx_history(pair: str) -> None:
+    """Profundidad del historial diario de un par en Tiingo FX."""
+    key = os.environ.get("TIINGO_API_KEY", "").strip()
+    r = requests.get(f"https://api.tiingo.com/tiingo/fx/{pair}/prices",
+                     headers={"Authorization": f"Token {key}"},
+                     params={"startDate": "2020-01-01", "endDate": "2020-03-31", "resampleFreq": "1day"}, timeout=60)
+    data = r.json() if r.ok else r.text
+    ok = r.ok and isinstance(data, list) and bool(data)
+    report(f"tiingo fx historial {pair} 2020T1", ok,
+           f"{len(data)} días, primero {data[0]['date'][:10]} cierre {data[0].get('close')}" if ok else f"HTTP {r.status_code} {str(data)[:200]}")
+
+
 def yahoo(symbol: str) -> None:
     try:
         r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
@@ -72,16 +84,19 @@ def yahoo(symbol: str) -> None:
 
 def euronext(isin_mic: str) -> None:
     url = f"https://live.euronext.com/en/ajax/AwlHistoricalPrice/getFullDownloadAjax/{isin_mic}"
-    try:
-        r = requests.post(url, headers=UA, timeout=30, data={
-            "format": "csv", "decimal_separator": ".", "date_form": "Y-m-d",
-            "startdate": START, "enddate": date.today().isoformat(),
-        })
-        lines = [l for l in r.text.splitlines() if l.strip()]
-        report(f"euronext {isin_mic}", r.ok and len(lines) > 3,
-               f"HTTP {r.status_code}, {len(lines)} líneas; {' | '.join(lines[:4])[:300]}")
-    except Exception as exc:
-        report(f"euronext {isin_mic}", False, str(exc)[:200])
+    params = {"format": "csv", "decimal_separator": ".", "date_form": "Y-m-d", "op": "",
+              "adjusted": "", "base100": "", "startdate": START, "enddate": date.today().isoformat()}
+    for how in ("get", "post"):
+        try:
+            if how == "get":
+                r = requests.get(url, params=params, headers=UA, timeout=30)
+            else:
+                r = requests.post(url, params={"format": "csv"}, data=params, headers=UA, timeout=30)
+            lines = [l for l in r.text.splitlines() if l.strip()]
+            report(f"euronext {how} {isin_mic}", r.ok and len(lines) > 3,
+                   f"HTTP {r.status_code}, {len(lines)} líneas; {' | '.join(lines[:5])[:300]}")
+        except Exception as exc:
+            report(f"euronext {how} {isin_mic}", False, str(exc)[:200])
 
 
 def main() -> int:
@@ -89,11 +104,8 @@ def main() -> int:
     if group == "tiingo":
         for pair in ("xauusd", "xagusd"):
             tiingo_fx(pair)
-        for t in ("300750", "300750.SZ", "HO", "HG"):
-            tiingo_daily(t)
+        tiingo_fx_history("xauusd")
     elif group == "public":
-        for s in ("^MOVE", "DX-Y.NYB", "HG=F", "HO.PA", "300750.SZ", "GC=F"):
-            yahoo(s)
         euronext("FR0000121329-XPAR")
     return 0
 
