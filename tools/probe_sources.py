@@ -218,6 +218,76 @@ def events() -> None:
             report(f"rss {name}", False, str(exc)[:200])
 
 
+def flows(part: str) -> None:
+    """COT de la CFTC, derivados cripto, flujos de ETF y volumen."""
+    import json as _json
+    if part == "crypto":
+        _crypto(_json)
+        return
+    for ds, code, name in [("72hh-3qpy", "088691", "disagg oro"), ("gpe5-46if", "13874A", "tff sp500"),
+                           ("6dca-aqww", "133741", "legacy btc cme")]:
+        try:
+            r = requests.get(f"https://publicreporting.cftc.gov/resource/{ds}.json", headers=UA, timeout=60, params={
+                "$where": f"cftc_contract_market_code='{code}'", "$order": "report_date_as_yyyy_mm_dd DESC", "$limit": 2})
+            rows = r.json() if r.ok else []
+            keys = sorted(rows[0].keys()) if rows else []
+            report(f"cot {name}", bool(rows), f"HTTP {r.status_code}; fecha {rows[0].get('report_date_as_yyyy_mm_dd') if rows else ''}; "
+                   f"{rows[0].get('market_and_exchange_names') if rows else r.text[:150]}; campos: {', '.join(k for k in keys if 'pct' not in k and 'conc' not in k and 'traders' not in k)[:600]}")
+        except Exception as exc:
+            report(f"cot {name}", False, str(exc)[:200])
+    _etf()
+
+
+def _crypto(_json) -> None:
+    crypto = {
+        "deribit summary": "https://www.deribit.com/api/v2/public/get_book_summary_by_instrument?instrument_name=BTC-PERPETUAL",
+        "deribit funding": "https://www.deribit.com/api/v2/public/get_funding_rate_history?instrument_name=BTC-PERPETUAL&start_timestamp=1760000000000&end_timestamp=1760600000000",
+        "okx oi": "https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-volume?ccy=BTC&period=1D",
+        "okx funding": "https://www.okx.com/api/v5/public/funding-rate-history?instId=BTC-USDT-SWAP&limit=3",
+        "okx liq": "https://www.okx.com/api/v5/public/liquidation-orders?instType=SWAP&uly=BTC-USDT&state=filled&limit=3",
+        "bybit oi": "https://api.bybit.com/v5/market/open-interest?category=linear&symbol=BTCUSDT&intervalTime=1d&limit=3",
+        "binance oi": "https://fapi.binance.com/futures/data/openInterestHist?symbol=BTCUSDT&period=1d&limit=3",
+        "hyperliquid": "https://api.hyperliquid.xyz/info",
+    }
+    for name, url in crypto.items():
+        try:
+            if name == "hyperliquid":
+                r = requests.post(url, json={"type": "metaAndAssetCtxs"}, headers=UA, timeout=30)
+                body = r.json() if r.ok else r.text
+                ctx = body[1][0] if r.ok else body
+                report(name, r.ok, f"HTTP {r.status_code} {_json.dumps(ctx)[:300]}")
+                continue
+            r = requests.get(url, headers=UA, timeout=30)
+            report(f"cripto {name}", r.ok, f"HTTP {r.status_code} {r.text[:350]}")
+        except Exception as exc:
+            report(f"cripto {name}", False, str(exc)[:200])
+
+
+def _etf() -> None:
+    etf = {
+        "gld archivo": "https://www.spdrgoldshares.com/assets/dynamic/GLD/GLD_US_archive_EN.csv",
+        "spy navhist": "https://www.ssga.com/us/en/intermediary/library-content/products/fund-data/etfs/us/navhist-us-en-spy.xlsx",
+        "ibit ishares": "https://www.ishares.com/us/products/333011/ishares-bitcoin-trust-etf/1467271812596.ajax?tab=all&fileType=json",
+        "farside btc": "https://farside.co.uk/bitcoin-etf-flow-all-data/",
+    }
+    for name, url in etf.items():
+        try:
+            r = requests.get(url, headers=UA, timeout=60)
+            ct = r.headers.get("content-type", "")
+            body = r.text[:300].replace("\n", " ") if "text" in ct or "json" in ct or "csv" in ct else f"<{len(r.content)} bytes>"
+            report(f"etf {name}", r.ok, f"HTTP {r.status_code} {ct[:40]} {body}")
+        except Exception as exc:
+            report(f"etf {name}", False, str(exc)[:200])
+    key = os.environ.get("TIINGO_API_KEY", "").strip()
+    try:
+        r = requests.get("https://api.tiingo.com/tiingo/daily/GLD/prices", headers={"Authorization": f"Token {key}"},
+                         params={"startDate": START}, timeout=30)
+        d = r.json()
+        report("tiingo volumen GLD", r.ok, f"último {d[-1]['date'][:10]} volume {d[-1].get('volume')}" if r.ok and d else r.text[:200])
+    except Exception as exc:
+        report("tiingo volumen", False, str(exc)[:200])
+
+
 def main() -> int:
     group = sys.argv[1] if len(sys.argv) > 1 else "tiingo"
     if group == "tiingo":
@@ -228,6 +298,8 @@ def main() -> int:
         imf()
     elif group == "events":
         events()
+    elif group in ("flows", "crypto"):
+        flows(group)
     elif group == "public":
         euronext("FR0000121329-XPAR")
     return 0
