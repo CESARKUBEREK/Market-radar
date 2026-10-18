@@ -8,8 +8,9 @@ let client: SupabaseClient | null = null;
 async function db(): Promise<SupabaseClient> {
   await connection(); // datos en vivo: cada petición lee la base de datos
   if (!client) {
-    const url = process.env.SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    // trim(): un salto de línea al pegar la variable en Vercel rompe la conexión.
+    const url = process.env.SUPABASE_URL?.trim().replace(/\/+$/, "");
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
     if (!url || !key) throw new Error("Faltan SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY");
     client = createClient(url, key, { auth: { persistSession: false } });
   }
