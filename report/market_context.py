@@ -77,7 +77,7 @@ def _chg(cur: float, old: float | None, is_rate: bool) -> float | None:
     if old is None:
         return None
     if is_rate:
-        return round((cur - old) * 100, 1)                      # puntos básicos
+        return round((cur - old) * 100)                         # puntos básicos
     return round((cur / old - 1) * 100, 2) if old else None
 
 
@@ -139,7 +139,8 @@ def instrument_context(series: list[tuple[str, float]], is_rate: bool) -> dict:
 
     unit = "pb" if is_rate else "%"
     return {
-        "fecha_cierre": last, "ultimo": round(cur, 4 if abs(cur) < 10 else 2),
+        "fecha_cierre": last,
+        ("ultimo_nivel_%" if is_rate else "ultimo"): round(cur, 2) if is_rate else round(cur, 4 if abs(cur) < 10 else 2),
         f"variacion_1_semana_{unit}": _chg(cur, _ago(series, 7), is_rate),
         f"variacion_1_mes_{unit}": _chg(cur, _ago(series, 30), is_rate),
         f"variacion_3_meses_{unit}": _chg(cur, _ago(series, 91), is_rate),
@@ -172,14 +173,18 @@ def macro_context(macro: dict, closes: dict, correlations: list[dict]) -> dict:
         cur = liq[0]
         year = liq[min(51, len(liq) - 1)]
         out["liquidez_neta_fed"] = {
-            "fecha": cur["as_of"], "nivel_miles_de_millones_usd": round(float(cur["net_liquidity_b"])),
-            "cambio_4_semanas": cur.get("chg_4w_b"), "cambio_13_semanas": cur.get("chg_13w_b"),
+            "fecha": cur["as_of"], "unidad": "miles de millones de USD",
+            "nivel": round(float(cur["net_liquidity_b"])),
+            "cambio_4_semanas": None if cur.get("chg_4w_b") is None else round(float(cur["chg_4w_b"])),
+            "cambio_13_semanas": None if cur.get("chg_13w_b") is None else round(float(cur["chg_13w_b"])),
             "cambio_aprox_1_año": round(float(cur["net_liquidity_b"]) - float(year["net_liquidity_b"])),
             "fuente": "FRED (WALCL − WTREGEN − RRPONTSYD)"}
     m2 = macro.get("m2") or []
     if m2:
-        out["m2"] = {"fecha": m2[0]["as_of"], "variacion_interanual_%": m2[0].get("chg_yoy_pct"),
-                     "variacion_interanual_hace_6_meses_%": m2[min(6, len(m2) - 1)].get("chg_yoy_pct"),
+        def r2(x):
+            return None if x is None else round(float(x), 2)
+        out["m2"] = {"fecha": m2[0]["as_of"], "variacion_interanual_%": r2(m2[0].get("chg_yoy_pct")),
+                     "variacion_interanual_hace_6_meses_%": r2(m2[min(6, len(m2) - 1)].get("chg_yoy_pct")),
                      "fuente": "FRED (M2SL)"}
     ff = macro.get("fedfunds") or []
     if ff:

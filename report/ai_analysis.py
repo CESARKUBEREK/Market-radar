@@ -212,8 +212,10 @@ LIMITACIONES: lo que la evidencia no permite confirmar.
 
 Nada de recomendaciones de compra o venta. Máximo 8 hechos, 5 interpretaciones y 4 hipótesis.
 
-Estilo: frases cortas; números en formato español (coma decimal, punto de miles), 2 decimales como máximo; tipos \
-en pb; fechas como «16/10» o «mar. 2022». No escribas nombres de campos ni identificadores dentro del texto. \
+Estilo: frases cortas; números en formato español (coma decimal, punto de miles), 2 decimales como máximo. \
+Los NIVELES de tipos (US10Y, US02Y, fondos federales) van en % con 2 decimales («5,10 %»); sus VARIACIONES y \
+distancias, en puntos básicos sin decimales («−12 pb»). La liquidez y M2, en miles de millones de dólares \
+(«5.872 mm $»), sin decimales. Fechas como «16/10» o «mar. 2022». No escribas nombres de campos ni identificadores dentro del texto. \
 En las hipótesis, el campo «si» empieza directamente por la condición, sin la palabra «si»."""
 
 SCHEMA = {
@@ -370,7 +372,9 @@ def _refs_html(refs: list[str], sources: dict) -> str:
 
 
 def _no_si(text: str) -> str:
-    return re.sub(r"^\s*si\s+", "", text, flags=re.I)
+    t = re.sub(r"^\s*si\s+", "", text, flags=re.I)
+    # minúscula inicial salvo siglas («El DXY» → «el DXY», «US10Y» se queda igual)
+    return t[0].lower() + t[1:] if len(t) > 1 and t[0].isupper() and not t[1].isupper() else t
 
 
 def render(analysis: dict) -> str:
