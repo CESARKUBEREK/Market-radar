@@ -7,7 +7,7 @@ Dos tipos de serie, según attributes.kind:
   mensual). source_code = clave SDMX 2.1 del flujo IRFCL, p. ej.
   'IRFCL/USA.IRFCLDT1_IRFCL56V_FTO..M'. Se guarda en toneladas.
 - 'weo': deuda bruta del gobierno general en % del PIB (WEO, anual).
-  source_code = indicador@país, p. ej. 'GGXWDG_NGDP@JPN'. Los años desde el
+  source_code = clave SDMX 2.1, p. ej. 'WEO/JPN.GGXWDG_NGDP.A'. Los años desde el
   actual en adelante son proyecciones (is_forecast = true).
 
 Punto en el tiempo: el FMI no publica fechas de publicación por observación.
@@ -38,7 +38,6 @@ from common import HISTORY_START, Supabase, env_flag, now_utc, run_catalog
 
 SOURCE_ID = "imf"
 SDMX21 = "https://api.imf.org/external/sdmx/2.1/data"
-DATAMAPPER = "https://www.imf.org/external/datamapper/api/v1"
 UA = {"User-Agent": "Mozilla/5.0 (market-radar personal data)"}
 TROY_OZ_PER_TONNE = Decimal("32150.7466")
 GOLD_PUBLISH_LAG_DAYS = 45
@@ -66,13 +65,18 @@ def month_start(period: str) -> dt.date:
     return dt.date(int(y), int(m), 1)
 
 
-def fetch_gold(series: dict) -> list[tuple[dt.date, Decimal]]:
-    flow, _, key = series["source_code"].partition("/")
-    r = http_get(f"{SDMX21}/{flow}/{key}", params={"startPeriod": HISTORY_START[:7]},
+def sdmx_csv(source_code: str, start: str) -> list[dict]:
+    flow, _, key = source_code.partition("/")
+    r = http_get(f"{SDMX21}/{flow}/{key}", params={"startPeriod": start},
                  headers={"Accept": "application/vnd.sdmx.data+csv;version=1.0.0"})
     rows = list(csv.DictReader(io.StringIO(r.text)))
     if rows and not {"TIME_PERIOD", "OBS_VALUE"} <= rows[0].keys():
-        raise ValueError(f"Formato inesperado de IRFCL: columnas {list(rows[0].keys())[:10]}")
+        raise ValueError(f"Formato inesperado del FMI: columnas {list(rows[0].keys())[:10]}")
+    return rows
+
+
+def fetch_gold(series: dict) -> list[tuple[dt.date, Decimal]]:
+    rows = sdmx_csv(series["source_code"], HISTORY_START[:7])
     # S1XS1311 = autoridades monetarias + administración central (el total oficial).
     wanted_sector = (series.get("attributes") or {}).get("sector", DEFAULT_SECTOR)
     by_sector: dict[str, list[dict]] = {}
@@ -104,17 +108,10 @@ def fetch_gold(series: dict) -> list[tuple[dt.date, Decimal]]:
 
 # --- deuda/PIB (WEO) ------------------------------------------------------ #
 def fetch_weo(series: dict) -> list[tuple[dt.date, Decimal]]:
-    indicator, _, country = series["source_code"].partition("@")
-    r = http_get(f"{DATAMAPPER}/{indicator}/{country}", headers={"Accept": "application/json"})
-    try:
-        data = r.json()
-    except ValueError:
-        raise ValueError(f"DataMapper no devolvió JSON (HTTP {r.status_code}, "
-                         f"{r.headers.get('content-type', '')}): {r.text[:120]!r}")
-    values = (data.get("values") or {}).get(indicator, {}).get(country, {})
-    first = int(HISTORY_START[:4])
-    return sorted((dt.date(int(y), 1, 1), Decimal(str(v)))
-                  for y, v in values.items() if v is not None and int(y) >= first)
+    # DataMapper bloquea las IP de GitHub (403); se usa el flujo SDMX del WEO.
+    rows = sdmx_csv(series["source_code"], HISTORY_START[:4])
+    return sorted((dt.date(int(x["TIME_PERIOD"][:4]), 1, 1), Decimal(x["OBS_VALUE"].strip()))
+                  for x in rows if (x.get("OBS_VALUE") or "").strip() not in ("", "NaN"))
 
 
 # --- común ---------------------------------------------------------------- #
