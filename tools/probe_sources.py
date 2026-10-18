@@ -99,12 +99,41 @@ def euronext(isin_mic: str) -> None:
             report(f"euronext {how} {isin_mic}", False, str(exc)[:200])
 
 
+def imf() -> None:
+    """Reservas de oro (IRFCL, onzas troy) y deuda/PIB (WEO vía DataMapper)."""
+    gold = ("https://api.imf.org/external/sdmx/2.1/data/IRFCL/"
+            "USA+DEU+ITA+FRA+CHN+RUS+IND+CHE+JPN.IRFCLDT1_IRFCL56V_FTO..M")
+    for accept in ("application/vnd.sdmx.data+csv;version=1.0.0", "text/csv"):
+        try:
+            r = requests.get(gold, params={"startPeriod": "2020-01"}, headers={**UA, "Accept": accept}, timeout=60)
+            lines = r.text.splitlines()
+            report(f"imf irfcl gold [{accept[:30]}]", r.ok and len(lines) > 2,
+                   f"HTTP {r.status_code}, {len(lines)} líneas; {' | '.join(lines[:3])[:600]}")
+            if r.ok and len(lines) > 2:
+                countries = sorted({l.split(',')[1] for l in lines[1:] if ',' in l})
+                last = lines[-1][:200]
+                report("imf irfcl gold países/último", True, f"{countries} | {last}")
+                break
+        except Exception as exc:
+            report("imf irfcl gold", False, str(exc)[:200])
+    try:
+        r = requests.get("https://www.imf.org/external/datamapper/api/v1/GGXWDG_NGDP/"
+                         "JPN/GBR/USA/FRA/CHN/IND/ARG/RUS", headers=UA, timeout=60)
+        vals = r.json().get("values", {}).get("GGXWDG_NGDP", {})
+        detail = "; ".join(f"{c}: {min(v)}-{max(v)} ({v.get('2025')})" for c, v in vals.items())
+        report("imf datamapper deuda/PIB", bool(vals), f"HTTP {r.status_code}; {detail}"[:800])
+    except Exception as exc:
+        report("imf datamapper deuda/PIB", False, str(exc)[:200])
+
+
 def main() -> int:
     group = sys.argv[1] if len(sys.argv) > 1 else "tiingo"
     if group == "tiingo":
         for pair in ("xauusd", "xagusd"):
             tiingo_fx(pair)
         tiingo_fx_history("xauusd")
+    elif group == "imf":
+        imf()
     elif group == "public":
         euronext("FR0000121329-XPAR")
     return 0
