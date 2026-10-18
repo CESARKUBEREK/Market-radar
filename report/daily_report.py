@@ -22,6 +22,7 @@ import argparse
 import datetime as dt
 import html
 import os
+import re
 import smtplib
 import sys
 from email.message import EmailMessage
@@ -117,6 +118,12 @@ def load(db: Supabase, report_date: dt.date) -> dict:
         "nfci": db.select("v_observations_latest", {
             "select": "as_of,value", "series_id": "eq.fred_NFCI", "order": "as_of.desc", "limit": "1"}),
         "correlations": db.select("v_correlations_latest", {"select": "*", "order": "pair_id"}),
+        # FMI: solo los últimos dos años de oro (mensual) y toda la deuda (anual, con proyecciones).
+        "imf": db.select("v_observations_latest", {
+            "select": "series_id,as_of,value,is_forecast,published_at",
+            "or": f"(and(series_id.like.wgc_gold_tonnes_*,as_of.gte.{report_date.year - 2}-01-01),"
+                  "series_id.like.imf_debt_gdp_*)",
+            "quality_status": "eq.ok", "order": "series_id,as_of", "limit": "2000"}),
         "alerts": db.select("alerts", {
             "select": "as_of,rule_id,title,kind", "as_of": f"gte.{since}",
             "order": "as_of.desc,rule_id"}),
@@ -204,6 +211,11 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str) -> tuple[str, 
         body.append(section("Liquidez y política monetaria (EE. UU.)", table(
             ["Indicador", "Nivel", "Cambio", "Cambio largo", "Dato de"], liq_rows)))
 
+    # FMI: solo cuando hay datos publicados en los últimos días (el oro es mensual; la deuda, semestral).
+    imf_section = compose_imf(data.get("imf") or [], report_date)
+    if imf_section:
+        body.append(imf_section)
+
     # Correlaciones: se destacan las que están en el extremo de su rango anual
     corr_rows = []
     for c in data["correlations"]:
@@ -231,6 +243,43 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str) -> tuple[str, 
     content = {"movers": [m["instrument"] for m in movers], "alerts": len(recent_alerts),
                "stale": stale, "failed_sources": failed}
     return title, html_doc, content
+
+
+COUNTRY = {"USA": "Estados Unidos", "DEU": "Alemania", "ITA": "Italia", "FRA": "Francia", "CHN": "China",
+           "RUS": "Rusia", "IND": "India", "CHE": "Suiza", "JPN": "Japón", "GBR": "Reino Unido",
+           "ARG": "Argentina"}
+IMF_NEW_DAYS = 3
+
+
+def compose_imf(rows: list[dict], report_date: dt.date) -> str:
+    cutoff = (report_date - dt.timedelta(days=IMF_NEW_DAYS)).isoformat()
+    by: dict[str, list[dict]] = {}
+    for r in rows:
+        by.setdefault(r["series_id"], []).append(r)
+    gold_rows, debt_rows = [], []
+    for sid, ps in sorted(by.items()):
+        if not any((p.get("published_at") or "") >= cutoff for p in ps):
+            continue
+        code = sid[-3:]
+        name = esc(COUNTRY.get(code, code))
+        if sid.startswith("wgc_gold_tonnes_"):
+            last = ps[-1]
+            prev = ps[-2] if len(ps) > 1 else None
+            delta = float(last["value"]) - float(prev["value"]) if prev else None
+            gold_rows.append([name, num(last["value"], 0), chg_abs(delta), esc(last["as_of"][:7])])
+        else:
+            y = {int(p["as_of"][:4]): p for p in ps}
+            cur, nxt = y.get(report_date.year), y.get(report_date.year + 1)
+            debt_rows.append([name, num(cur["value"], 0) if cur else "—", num(nxt["value"], 0) if nxt else "—",
+                              num(y[2020]["value"], 0) if 2020 in y else "—"])
+    parts = []
+    if gold_rows:
+        parts.append(table(["País", "Toneladas", "Cambio mensual", "Dato de"], gold_rows))
+    if debt_rows:
+        parts.append(f'<p style="margin:12px 0 4px;font-size:13px;color:{GREY}">Deuda pública bruta, % del PIB '
+                     f"(previsiones del FMI)</p>"
+                     + table(["País", str(report_date.year), str(report_date.year + 1), "2020"], debt_rows))
+    return section("Datos nuevos del FMI: reservas de oro y deuda", "".join(parts)) if parts else ""
 
 
 def chg_abs(x) -> str:
@@ -274,6 +323,14 @@ def main() -> int:
     row = {"report_date": report_date.isoformat(), "generated_at": now_utc().isoformat(),
            "experimental": True, "content": content, "html": html_doc,
            "stale_sources": content["stale"], "status": "draft"}
+    sections = re.findall(r"<h2[^>]*>([^<]+)</h2>", html_doc)
+    print(f"::notice::Secciones del informe: {' · '.join(sections)}")
+    already_sent = db.select("daily_reports", {"select": "status", "report_date": f"eq.{report_date.isoformat()}",
+                                               "status": "eq.sent"})
+    if args.dry_run and already_sent:
+        # Una prueba no sobrescribe el informe que ya se envió hoy.
+        print("Prueba: el informe de hoy ya se envió; no se guarda el borrador.")
+        return 0
     db.insert("daily_reports", row, on_conflict="report_date")
 
     if args.dry_run:

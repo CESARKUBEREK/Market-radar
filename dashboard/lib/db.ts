@@ -101,6 +101,15 @@ export async function getSeriesInfo(seriesId: string) {
     source_code: string | null; attributes: Record<string, unknown> } | null;
 }
 
+export type FamilyPoint = { series_id: string; as_of: string; value: number; is_forecast: boolean };
+
+/** Todas las observaciones vigentes de las series cuyo ID empieza por `prefix`. */
+export async function getSeriesFamily(prefix: string): Promise<FamilyPoint[]> {
+  return all<FamilyPoint>((c) =>
+    c.from("v_observations_latest").select("series_id,as_of,value,is_forecast")
+      .like("series_id", `${prefix}%`).eq("quality_status", "ok").order("series_id").order("as_of"));
+}
+
 export async function getNetLiquidity() {
   return all<{ as_of: string; fed_balance_b: number; tga_b: number; rrp_b: number;
     net_liquidity_b: number; chg_4w_b: number | null; chg_13w_b: number | null }>(

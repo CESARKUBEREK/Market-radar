@@ -1,12 +1,15 @@
 import LineChart from "@/components/LineChart";
 import { Change, Section, Stat } from "@/components/ui";
-import { getHistory, getM2, getNetLiquidity, getSummary } from "@/lib/db";
+import { getHistory, getM2, getNetLiquidity, getSeriesFamily, getSummary, type FamilyPoint } from "@/lib/db";
 import { num, signed } from "@/lib/format";
 
 export default async function MacroPage() {
-  const [liquidity, m2, fedfunds, nfci, summary] = await Promise.all([
+  const [liquidity, m2, fedfunds, nfci, summary, gold, debt] = await Promise.all([
     getNetLiquidity(), getM2(), getHistory("fred_FEDFUNDS"), getHistory("fred_NFCI"), getSummary(),
+    getSeriesFamily("wgc_gold_tonnes_"), getSeriesFamily("imf_debt_gdp_"),
   ]);
+  const goldRows = goldTable(gold);
+  const debtRows = debtTable(debt);
   const liq = liquidity.at(-1);
   const lastM2 = m2.at(-1);
   const ff = fedfunds.at(-1);
@@ -18,8 +21,8 @@ export default async function MacroPage() {
 
   return (
     <>
-      <h1>Macro y liquidez (EE. UU.)</h1>
-      <p className="lead">Liquidez de la Fed, oferta monetaria, tipos y condiciones financieras.</p>
+      <h1>Macro y liquidez</h1>
+      <p className="lead">Liquidez de la Fed, oferta monetaria, tipos y condiciones financieras (EE. UU.); reservas de oro y deuda pública.</p>
 
       <div className="grid-stats" style={{ marginTop: 12 }}>
         <Stat label="Liquidez neta de la Fed" value={liq ? `${num(liq.net_liquidity_b, 0)} mm $` : "—"}
@@ -61,10 +64,89 @@ export default async function MacroPage() {
         </Section>
       </div>
 
-      <Section title="Pendiente en este panel">
-        <p className="muted">Reservas oficiales de oro (9 países) y deuda pública/PIB (8 países): las series están en el
-          catálogo pero aún no se descargan.</p>
+      <Section title="Reservas oficiales de oro" note="Toneladas · FMI (IRFCL), mensual">
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>País</th><th>Toneladas</th><th>12 meses</th><th>Desde ene. 2020</th><th>Dato de</th></tr></thead>
+            <tbody>
+              {goldRows.map((g) => (
+                <tr key={g.code}>
+                  <td>{COUNTRY[g.code] ?? g.code}</td>
+                  <td>{num(g.last, 0)}</td>
+                  <td><Delta value={g.chg12} /></td>
+                  <td><Delta value={g.chgStart} /></td>
+                  <td>{g.date.slice(0, 7)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+
+      <Section title="Deuda pública bruta" note="% del PIB · FMI (WEO), anual · en cursiva, proyecciones">
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>País</th>{DEBT_YEARS.map((y) => <th key={y}>{y}</th>)}<th>Cambio 2020–{thisYear}</th></tr></thead>
+            <tbody>
+              {debtRows.map((d) => (
+                <tr key={d.code}>
+                  <td>{COUNTRY[d.code] ?? d.code}</td>
+                  {DEBT_YEARS.map((y) => {
+                    const p = d.byYear.get(y);
+                    return <td key={y} style={p?.is_forecast ? { fontStyle: "italic" } : undefined}>
+                      {p ? num(p.value, 0) : "—"}</td>;
+                  })}
+                  <td><Delta value={d.chg} invert /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </Section>
     </>
   );
+}
+
+const COUNTRY: Record<string, string> = {
+  USA: "Estados Unidos", DEU: "Alemania", ITA: "Italia", FRA: "Francia", CHN: "China", RUS: "Rusia",
+  IND: "India", CHE: "Suiza", JPN: "Japón", GBR: "Reino Unido", ARG: "Argentina",
+};
+const thisYear = new Date().getFullYear();
+const DEBT_YEARS = [2020, thisYear - 2, thisYear - 1, thisYear, thisYear + 2, thisYear + 5]
+  .filter((y, i, a) => a.indexOf(y) === i);
+
+function Delta({ value, invert = false }: { value: number | null; invert?: boolean }) {
+  if (value === null) return <>—</>;
+  const sign = Math.sign(value) * (invert ? -1 : 1);
+  return <span className={sign > 0 ? "up" : sign < 0 ? "down" : "flat"}>{signed(value, 0)}</span>;
+}
+
+function byCountry(points: FamilyPoint[]) {
+  const m = new Map<string, FamilyPoint[]>();
+  for (const p of points) {
+    const code = p.series_id.slice(-3);
+    if (!m.has(code)) m.set(code, []);
+    m.get(code)!.push(p);
+  }
+  return m;
+}
+
+function goldTable(points: FamilyPoint[]) {
+  return [...byCountry(points)].map(([code, ps]) => {
+    const last = ps.at(-1)!;
+    const yearAgo = ps.findLast((p) => p.as_of <= `${Number(last.as_of.slice(0, 4)) - 1}${last.as_of.slice(4)}`);
+    return {
+      code, date: last.as_of, last: Number(last.value),
+      chg12: yearAgo ? Number(last.value) - Number(yearAgo.value) : null,
+      chgStart: Number(last.value) - Number(ps[0].value),
+    };
+  }).sort((a, b) => b.last - a.last);
+}
+
+function debtTable(points: FamilyPoint[]) {
+  return [...byCountry(points)].map(([code, ps]) => {
+    const byYear = new Map(ps.map((p) => [Number(p.as_of.slice(0, 4)), p]));
+    const a = byYear.get(2020), b = byYear.get(thisYear);
+    return { code, byYear, chg: a && b ? Number(b.value) - Number(a.value) : null };
+  }).sort((x, y) => Number(y.byYear.get(thisYear)?.value ?? 0) - Number(x.byYear.get(thisYear)?.value ?? 0));
 }
