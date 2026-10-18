@@ -19,6 +19,10 @@ Convenciones:
   entero cada semana) guardan una sola versión por fecha: vintage = 0, que se
   sobrescribe en cada ejecución, y published_at = fecha de la última versión.
   Estas series no son aptas para un backtest point-in-time.
+- Series con attributes.vintages = 'none' no existen en ALFRED (p. ej. SP500,
+  por derechos de autor): se descarga la versión vigente, vintage = 1 y
+  published_at se estima como el día de la observación a las 23:59:59 hora de
+  Nueva York (el cierre ya era público ese día).
 
 Modos:
 - incremental (por defecto): vintages de los últimos días; para series diarias,
@@ -202,7 +206,10 @@ def check_metadata(api_key: str, series: dict) -> dict:
 def ingest_series(db: Supabase, api_key: str, series: dict, backfill: bool) -> dict:
     code = series["source_code"]
     today = dt.date.today()
-    latest_only = (series.get("attributes") or {}).get("vintages") == "latest"
+    vintages_mode = (series.get("attributes") or {}).get("vintages", "all")
+    latest_only = vintages_mode == "latest"
+    if vintages_mode == "none":
+        return ingest_without_vintages(db, api_key, series, backfill)
     if backfill:
         realtime_start, observation_start = FULL_REALTIME_START, HISTORY_START
     else:
@@ -238,6 +245,36 @@ def ingest_series(db: Supabase, api_key: str, series: dict, backfill: bool) -> d
         result["windows"] = len(windows)
     if latest_only:
         result["vintages"] = "latest"
+    return result
+
+
+def ingest_without_vintages(db: Supabase, api_key: str, series: dict, backfill: bool) -> dict:
+    """Series sin historial en ALFRED: versión vigente con fecha de publicación estimada."""
+    today = dt.date.today()
+    start = HISTORY_START if backfill else max(
+        HISTORY_START, (today - dt.timedelta(days=DAILY_LOOKBACK_DAYS)).isoformat())
+    raw = []
+    offset = 0
+    while True:   # sin realtime_start/realtime_end: FRED devuelve la versión vigente
+        data = fred_get("series/observations", api_key, series_id=series["source_code"],
+                        observation_start=start, sort_order="asc", limit=FRED_PAGE, offset=offset)
+        page = data.get("observations", [])
+        raw.extend(page)
+        offset += len(page)
+        if not page or offset >= int(data.get("count", len(raw))):
+            break
+    rows = []
+    for o in raw:
+        row = to_row(series["id"], {**o, "realtime_start": o["date"]})
+        row["vintage"] = 1
+        rows.append(row)
+    rows = compress(rows)
+    db.upsert_observations(rows)
+    attrs = check_metadata(api_key, series)
+    attrs["published_at"] = "estimada: día de la observación, 23:59:59 Nueva York"
+    db.update("series", {"id": f"eq.{series['id']}"}, {"attributes": attrs})
+    result = summarize(rows)
+    result.update(fred_units=attrs.get("fred_units"), vintages="none")
     return result
 
 

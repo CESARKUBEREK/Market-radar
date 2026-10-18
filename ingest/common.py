@@ -16,7 +16,9 @@ UPSERT_CHUNK = 1000
 def require_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
-        sys.exit(f"Falta la variable de entorno {name}")
+        # "::error::" crea una anotación visible en GitHub Actions.
+        print(f"::error::Falta la variable de entorno {name} (¿existe el secreto en GitHub?)")
+        sys.exit(1)
     return value
 
 
@@ -141,6 +143,7 @@ def run_catalog(db: Supabase, source_id: str, mode: str, catalog: list[dict], in
         except Exception as exc:  # una serie que falla no detiene las demás
             errors[s["id"]] = str(exc)[:500]
             print(f"FAIL {s['id']:<22} {exc}")
+            print(f"::error::{source_id} {s['id']}: {str(exc)[:300]}")
     status = db.finish_log(log_id, mode, results, errors)
     print(f"{source_id}: {status}. Series correctas: {len(results)}, con error: {len(errors)}.")
     return 1 if errors else 0
