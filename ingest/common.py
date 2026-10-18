@@ -94,6 +94,25 @@ class Supabase:
                                                "verified_at": now_utc().isoformat()}), timeout=60)
         r.raise_for_status()
 
+    def ensure_series(self, rows: list[dict]) -> None:
+        """Alta en el catálogo de las series que un proceso genera por sí mismo.
+
+        Inserta las que faltan y actualiza nombre, unidad y atributos de las existentes,
+        sin tocar su estado de verificación.
+        """
+        for r in rows:
+            r.setdefault("attributes", {})
+            r.setdefault("status", "VERIFICADA")
+        existing = {s["id"] for s in self.select("series", {
+            "select": "id", "id": "in.(" + ",".join(r["id"] for r in rows) + ")"})}
+        new = [r for r in rows if r["id"] not in existing]
+        if new:
+            self.insert("series", new)
+        for r in rows:
+            if r["id"] in existing:
+                self.update("series", {"id": f"eq.{r['id']}"},
+                            {k: r[k] for k in ("name", "unit", "attributes", "source_code") if k in r})
+
     def rpc(self, function: str, args: dict | None = None) -> None:
         r = self.session.post(f"{self.base}/rpc/{function}", data=json.dumps(args or {}), timeout=300)
         r.raise_for_status()
