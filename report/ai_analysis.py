@@ -166,7 +166,9 @@ def build_evidence(data: dict, report_date: dt.date) -> dict:
         ev[f"X_{k}"] = {"tipo": "contexto macro (calculado)", "datos": v}
 
     # Fechas de cierre: los activos con datos de días anteriores se señalan (FRED publica con un día de retraso)
-    dates = {x["instrument"]: x["last_date"] for x in summary if x["instrument_id"] in market_context.CORE}
+    # Bitcoin cotiza también en fin de semana: no sirve de referencia para el resto.
+    dates = {x["instrument"]: x["last_date"] for x in summary
+             if x["instrument_id"] in market_context.CORE and x["instrument_id"] != "btc"}
     if dates:
         latest = max(dates.values())
         lag = {k: v for k, v in dates.items() if v < latest}
@@ -247,7 +249,9 @@ activos, variaciones y distancias en %. Los niveles de tipos en % («5,10 %»).
 - Cada activo con su fecha de cierre: si no coinciden entre activos, dilo («último cierre disponible, 15/10»).
 - Liquidez y M2 en miles de millones de dólares («5.872 mm $»).
 
-Estilo: frases cortas y concretas, sin muletillas («cabe destacar», «en este contexto»). Formato español \
+Estilo: frases cortas y concretas, sin muletillas («cabe destacar», «en este contexto») ni anglicismos \
+innecesarios (escribe «cierre de cortos», «grandes tecnológicas», «activos cíclicos», no «squeeze», «mega caps», \
+«beta»). Formato español \
 (coma decimal, punto de miles). Fechas «16/10». Nada de recomendaciones de compra o venta. En hipótesis, el campo \
 «si» empieza directamente por la condición."""
 
