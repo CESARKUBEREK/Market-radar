@@ -112,15 +112,15 @@ def imf() -> None:
         rows = list(csv.DictReader(io.StringIO(r.text)))
         keys = ["COUNTRY", "INDICATOR", "SECTOR", "FREQUENCY", "TIME_PERIOD", "OBS_VALUE", "SCALE",
                 "UNIT", "PUBLICATION_DATE", "UPDATE_DATE", "STATUS"]
-        report("imf irfcl fila", bool(rows), str({k: rows[0].get(k) for k in keys})[:800] if rows else r.text[:300])
+        del keys
         by: dict = {}
         for x in rows:
             by.setdefault((x.get("COUNTRY"), x.get("SECTOR")), []).append(x)
+        parts = []
         for (c, sec), xs in sorted(by.items(), key=lambda kv: str(kv[0])):
             xs.sort(key=lambda x: x["TIME_PERIOD"])
-            report(f"imf irfcl {c} {sec}", True,
-                   f"{len(xs)} obs, {xs[0]['TIME_PERIOD']}={xs[0]['OBS_VALUE']} … "
-                   f"{xs[-1]['TIME_PERIOD']}={xs[-1]['OBS_VALUE']} scale={xs[-1].get('SCALE')}")
+            parts.append(f"{c}/{sec}:{len(xs)}:{xs[-1]['TIME_PERIOD']}={float(xs[-1]['OBS_VALUE']) / 32150.7466:.0f}t")
+        report("imf irfcl resumen", bool(parts), " ".join(parts))
     except Exception as exc:
         report("imf irfcl", False, str(exc)[:200])
 
@@ -141,6 +141,19 @@ def imf() -> None:
                    + " | ".join(ln[:250] for ln in lines[:2]) + " || " + (lines[-1][:250] if lines else ""))
         except Exception as exc:
             report(f"imf deuda {name}", False, str(exc)[:200])
+    key = os.environ.get("FRED_API_KEY", "").strip()
+    if key:
+        got = []
+        for iso2 in ("US", "JP", "FR", "GB", "CN", "IN", "AR", "RU"):
+            try:
+                r = requests.get("https://api.stlouisfed.org/fred/series/observations",
+                                 params={"series_id": f"GGGDTA{iso2}A188N", "api_key": key,
+                                         "file_type": "json", "observation_start": "2020-01-01"}, timeout=30)
+                obs = r.json().get("observations", []) if r.ok else []
+                got.append(f"{iso2}:{obs[-1]['date'][:4]}={obs[-1]['value']}" if obs else f"{iso2}:HTTP{r.status_code}")
+            except Exception as exc:
+                got.append(f"{iso2}:{str(exc)[:40]}")
+        report("imf deuda vía FRED (GGGDTA..A188N)", any("=" in g for g in got), " ".join(got))
     try:
         r = requests.get("https://api.imf.org/external/sdmx/2.1/dataflow/all/all/latest",
                          headers={**UA, "Accept": "application/xml"}, timeout=60)

@@ -42,6 +42,7 @@ DATAMAPPER = "https://www.imf.org/external/datamapper/api/v1"
 UA = {"User-Agent": "Mozilla/5.0 (market-radar personal data)"}
 TROY_OZ_PER_TONNE = Decimal("32150.7466")
 GOLD_PUBLISH_LAG_DAYS = 45
+DEFAULT_SECTOR = "S1XS1311"
 # Comprobación de cordura: ningún banco central tiene más de 20.000 t.
 GOLD_MAX_TONNES = Decimal(20000)
 
@@ -58,20 +59,6 @@ def http_get(url: str, *, params: dict | None = None, headers: dict | None = Non
 
 
 # --- oro (IRFCL) ---------------------------------------------------------- #
-def scale_factor(raw: str | None) -> Decimal:
-    """SCALE puede venir como exponente ('6') o como texto ('Millions')."""
-    raw = (raw or "").strip()
-    if not raw:
-        return Decimal(1)
-    if raw.lstrip("-").isdigit():
-        return Decimal(10) ** int(raw)
-    words = {"units": 0, "thousands": 3, "millions": 6, "billions": 9}
-    for w, e in words.items():
-        if w in raw.lower():
-            return Decimal(10) ** e
-    raise ValueError(f"Escala desconocida en IRFCL: {raw!r}")
-
-
 def month_start(period: str) -> dt.date:
     # '2026-M08', '2026-08' o '2026M08'
     p = period.replace("M", "-").replace("--", "-")
@@ -86,7 +73,8 @@ def fetch_gold(series: dict) -> list[tuple[dt.date, Decimal]]:
     rows = list(csv.DictReader(io.StringIO(r.text)))
     if rows and not {"TIME_PERIOD", "OBS_VALUE"} <= rows[0].keys():
         raise ValueError(f"Formato inesperado de IRFCL: columnas {list(rows[0].keys())[:10]}")
-    wanted_sector = (series.get("attributes") or {}).get("sector")
+    # S1XS1311 = autoridades monetarias + administración central (el total oficial).
+    wanted_sector = (series.get("attributes") or {}).get("sector", DEFAULT_SECTOR)
     by_sector: dict[str, list[dict]] = {}
     for x in rows:
         if (x.get("OBS_VALUE") or "").strip() in ("", "NaN"):
@@ -104,7 +92,8 @@ def fetch_gold(series: dict) -> list[tuple[dt.date, Decimal]]:
         raise ValueError(f"Varios sectores en IRFCL {sorted(by_sector)}: fija attributes.sector")
     out = []
     for x in chosen:
-        ounces = Decimal(x["OBS_VALUE"].strip()) * scale_factor(x.get("SCALE"))
+        # OBS_VALUE ya viene en onzas; SCALE ('6') solo indica cómo mostrarlo.
+        ounces = Decimal(x["OBS_VALUE"].strip())
         tonnes = round(ounces / TROY_OZ_PER_TONNE, 3)
         if tonnes < 0 or tonnes > GOLD_MAX_TONNES:
             raise ValueError(f"Valor fuera de rango: {x['TIME_PERIOD']} = {tonnes} t "
