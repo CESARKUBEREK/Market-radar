@@ -26,7 +26,7 @@ Reglas que se imponen en la instrucción y se comprueban donde se puede:
 Variables de entorno:
   ANTHROPIC_API_KEY        obligatoria para activar el análisis
   ANALYSIS_MODEL           por defecto claude-sonnet-5-5
-  ANALYSIS_WEB_SEARCH      'false' para no buscar en la web (por defecto se busca)
+  ANALYSIS_WEB_SEARCH      'true' para activar la búsqueda web (desactivada por defecto)
   ANALYSIS_MAX_SEARCHES    por defecto 5
 """
 
@@ -296,7 +296,7 @@ def run(data: dict, report_date: dt.date) -> dict | None:
     if not key:
         return None
     model = os.environ.get("ANALYSIS_MODEL", "").strip() or DEFAULT_MODEL
-    use_web = os.environ.get("ANALYSIS_WEB_SEARCH", "true").strip().lower() != "false"
+    use_web = os.environ.get("ANALYSIS_WEB_SEARCH", "false").strip().lower() == "true"
     max_searches = int(os.environ.get("ANALYSIS_MAX_SEARCHES", "5") or 5)
     evidence = build_evidence(data, report_date)
     notes, web, usage = ("", {}, {"input_tokens": 0, "output_tokens": 0, "web_search_requests": 0})
