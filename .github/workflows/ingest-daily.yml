@@ -46,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false          # si una fuente falla, las demás siguen
       matrix:
-        source: [fred, tiingo, ecb, yahoo, euronext, imf, cftc, calendar, news]
+        source: [fred, tiingo, ecb, yahoo, euronext, imf, cftc, derivatives, calendar, news]
     steps:
       - name: Comprobar si toca esta fuente
         id: pick
