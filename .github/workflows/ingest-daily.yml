@@ -9,7 +9,7 @@ on:
       source:
         description: "Fuente a descargar"
         type: choice
-        options: [todas, fred, tiingo, ecb]
+        options: [todas, fred, tiingo, ecb, yahoo, euronext]
         default: todas
       backfill:
         description: "Descargar todo el historial desde 2020"
@@ -38,7 +38,7 @@ jobs:
     strategy:
       fail-fast: false          # si una fuente falla, las demás siguen
       matrix:
-        source: [fred, tiingo, ecb]
+        source: [fred, tiingo, ecb, yahoo, euronext]
     steps:
       - name: Comprobar si toca esta fuente
         id: pick

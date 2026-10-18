@@ -31,10 +31,8 @@ import requests
 
 from common import HISTORY_START, Supabase, env_flag, require_env, run_catalog, summarize
 
-TIINGO_API = "https://api.tiingo.com/tiingo/daily"
+TIINGO_API = "https://api.tiingo.com/tiingo"
 SOURCE_ID = "tiingo"
-NEW_YORK = ZoneInfo("America/New_York")
-PUBLISH_TIME = dt.time(20, 0)
 INCREMENTAL_LOOKBACK_DAYS = 10
 
 
@@ -42,10 +40,12 @@ class TiingoError(Exception):
     pass
 
 
-def tiingo_get(ticker: str, api_key: str, start: str) -> list[dict]:
-    url = f"{TIINGO_API}/{ticker}/prices"
+def tiingo_get(ticker: str, api_key: str, start: str, endpoint: str = "daily") -> list[dict]:
+    """endpoint = 'daily' (acciones y ETF) o 'fx' (divisas y metales: xauusd, xagusd)."""
+    url = f"{TIINGO_API}/{endpoint}/{ticker}/prices"
     headers = {"Authorization": f"Token {api_key}", "Content-Type": "application/json"}
-    params = {"startDate": start, "format": "json", "resampleFreq": "daily"}
+    params = {"startDate": start, "format": "json",
+              "resampleFreq": "1day" if endpoint == "fx" else "daily"}
     for attempt in range(4):
         r = requests.get(url, headers=headers, params=params, timeout=60)
         if r.status_code == 429 or r.status_code >= 500:
@@ -60,7 +60,23 @@ def tiingo_get(ticker: str, api_key: str, start: str) -> list[dict]:
     raise TiingoError("Tiingo no respondió tras 4 intentos")
 
 
-def to_row(series_id: str, item: dict) -> dict:
+def publish_moment(as_of: dt.date, attrs: dict) -> dt.datetime:
+    """Momento estimado en que el cierre era conocido.
+
+    Por defecto, el día de cotización a las 20:00 de Nueva York. Se puede
+    cambiar por serie con attributes.publish_tz y attributes.publish_time
+    (p. ej. CATL en Shenzhen: Asia/Shanghai, 16:00). En las series FX
+    (attributes.endpoint = 'fx') la vela diaria es UTC y se cierra a las
+    00:00 UTC del día siguiente.
+    """
+    if attrs.get("endpoint") == "fx":
+        return dt.datetime.combine(as_of + dt.timedelta(days=1), dt.time(0, 30), dt.timezone.utc)
+    tz = ZoneInfo(attrs.get("publish_tz", "America/New_York"))
+    hh, mm = (int(x) for x in attrs.get("publish_time", "20:00").split(":"))
+    return dt.datetime.combine(as_of, dt.time(hh, mm), tz)
+
+
+def to_row(series_id: str, item: dict, attrs: dict | None = None) -> dict:
     as_of = dt.date.fromisoformat(item["date"][:10])
     close = item.get("close")
     missing = close is None
@@ -68,7 +84,7 @@ def to_row(series_id: str, item: dict) -> dict:
         "series_id": series_id,
         "as_of": as_of.isoformat(),
         "vintage": 1,
-        "published_at": dt.datetime.combine(as_of, PUBLISH_TIME, NEW_YORK).isoformat(),
+        "published_at": publish_moment(as_of, attrs or {}).isoformat(),
         "value": None if missing else repr(float(close)),
         "quality_status": "missing" if missing else "ok",
     }
@@ -77,8 +93,12 @@ def to_row(series_id: str, item: dict) -> dict:
 def ingest_series(db: Supabase, api_key: str, series: dict, backfill: bool) -> dict:
     start = HISTORY_START if backfill else max(
         HISTORY_START, (dt.date.today() - dt.timedelta(days=INCREMENTAL_LOOKBACK_DAYS)).isoformat())
-    data = tiingo_get(series["source_code"], api_key, start)
-    rows = [to_row(series["id"], d) for d in data if d.get("date", "")[:10] >= HISTORY_START]
+    attrs = series.get("attributes") or {}
+    data = tiingo_get(series["source_code"], api_key, start, attrs.get("endpoint", "daily"))
+    today = dt.date.today().isoformat()
+    # Se descarta la vela del día en curso (FX): todavía no está cerrada.
+    rows = [to_row(series["id"], d, attrs) for d in data
+            if HISTORY_START <= d.get("date", "")[:10] < today]
     db.upsert_observations(rows)
     return summarize(rows)
 
