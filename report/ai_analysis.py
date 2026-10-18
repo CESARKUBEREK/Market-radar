@@ -32,12 +32,15 @@ import datetime as dt
 import html
 import json
 import os
+import re
 import time
 
 import requests
+from zoneinfo import ZoneInfo
 
 API = "https://api.openai.com/v1/responses"
 DEFAULT_MODEL = "gpt-5.4-mini"
+PARIS = ZoneInfo("Europe/Paris")
 SOURCE_LABEL = {"fred": "FRED", "tiingo": "Tiingo", "ecb": "BCE", "yahoo": "Yahoo (no oficial)",
                 "euronext": "Euronext", "imf": "FMI", "manual": "manual"}
 EVENT_LABEL = {"fomc": "Fed", "cpi": "IPC", "employment": "Empleo", "other": "Macro", "holiday": "Festivo",
@@ -56,6 +59,17 @@ def _z(s: dict) -> float | None:
     return (float(c) / scale) / daily if daily else None
 
 
+def _round_level(x: float, is_rate: bool) -> float:
+    if is_rate:
+        return round(x, 2)
+    return round(x, 4 if abs(x) < 10 else 2 if abs(x) < 10000 else 0)
+
+
+def _paris(iso: str) -> str:
+    d = dt.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    return d.astimezone(PARIS).strftime("%Y-%m-%d %H:%M") + " (París)"
+
+
 def _source_of(series_id: str) -> str:
     return SOURCE_LABEL.get(series_id.split("_", 1)[0], series_id.split("_", 1)[0])
 
@@ -68,16 +82,18 @@ def build_evidence(data: dict, report_date: dt.date) -> dict:
         z = _z(s)
         if s.get("chg_1d") is None:
             continue
-        unit = "pp" if s["is_rate"] else "%"
         moves.append({
             "instrumento": s["instrument"], "instrument_id": s["instrument_id"], "categoria": s["category"],
-            "fecha": s["last_date"], "ultimo": float(s["last_value"]),
-            "cambio_1d": round(float(s["chg_1d"]), 4), "unidad_cambio": unit,
-            "cambio_1s": None if s.get("chg_1w") is None else round(float(s["chg_1w"]), 4),
-            "z_1d": None if z is None else round(z, 2), "fuente": _source_of(s["series_id"]),
+            "fecha_cierre": s["last_date"], "ultimo": _round_level(float(s["last_value"]), s["is_rate"]),
+            # Tipos: variación en puntos básicos; resto: en %.
+            "variacion_dia": round(float(s["chg_1d"]) * (100 if s["is_rate"] else 1), 1 if s["is_rate"] else 2),
+            "unidad_variacion": "pb" if s["is_rate"] else "%",
+            "variacion_semana": None if s.get("chg_1w") is None else
+            round(float(s["chg_1w"]) * (100 if s["is_rate"] else 1), 1 if s["is_rate"] else 2),
+            "desviaciones_tipicas_dia": None if z is None else round(z, 1), "fuente": _source_of(s["series_id"]),
         })
-    moves.sort(key=lambda m: abs(m["z_1d"] or 0), reverse=True)
-    top = [m for m in moves if abs(m["z_1d"] or 0) >= 1.5][:10] or moves[:6]
+    moves.sort(key=lambda m: abs(m["desviaciones_tipicas_dia"] or 0), reverse=True)
+    top = [m for m in moves if abs(m["desviaciones_tipicas_dia"] or 0) >= 1.5][:10] or moves[:6]
     # Siempre los anclas macro, aunque se hayan movido poco
     anchors = {"us10y", "us02y", "dxy", "gold", "spx", "brent", "eurusd", "btc"}
     chosen = {m["instrument_id"] for m in top} | anchors
@@ -111,7 +127,7 @@ def build_evidence(data: dict, report_date: dt.date) -> dict:
     ]
     for desc, ok, topics in rules:
         if ok:
-            patterns.append({"patron": desc, "temas_a_buscar": topics})
+            patterns.append({"patron": desc, "temas_relacionados": topics})
     for i, p in enumerate(patterns, 1):
         ev[f"P{i}"] = {"tipo": "patrón detectado por reglas (no es una causa)", **p}
 
@@ -122,12 +138,12 @@ def build_evidence(data: dict, report_date: dt.date) -> dict:
     until = (report_date + dt.timedelta(days=7)).isoformat()
     events = [e for e in (data.get("events_window") or []) if since <= e["event_at"][:10] <= until]
     for i, e in enumerate(events[:20], 1):
-        ev[f"C{i}"] = {"tipo": "evento de calendario", "fecha": e["event_at"][:16],
+        ev[f"C{i}"] = {"tipo": "evento de calendario", "fecha": _paris(e["event_at"]),
                        "ya_ocurrido": e["event_at"][:10] < report_date.isoformat(),
                        "clase": EVENT_LABEL.get(e["kind"], e["kind"]), "texto": e.get("notes")}
 
     for i, n in enumerate((data.get("news_ai") or [])[:20], 1):
-        ev[f"N{i}"] = {"tipo": "noticia oficial", "fecha": n["published_at"][:16], "fuente": n["source_name"],
+        ev[f"N{i}"] = {"tipo": "noticia oficial", "fecha": _paris(n["published_at"]), "fuente": n["source_name"],
                        "titular": n["title"], "resumen": (n.get("summary") or "")[:300], "url": n["url"]}
     return ev
 
@@ -163,7 +179,13 @@ HIPÓTESIS: consecuencias posibles si se cumplen condiciones observables. Format
 horizonte temporal y qué la invalidaría. Vincúlalas a eventos del calendario (C) cuando existan.
 
 Además, en «limitaciones», señala lo que no se ha podido confirmar o las fuentes que faltan.
-Nada de recomendaciones de compra o venta. Máximo 6 hechos, 4 interpretaciones y 3 hipótesis. Frases cortas."""
+Nada de recomendaciones de compra o venta. Máximo 6 hechos, 4 interpretaciones y 3 hipótesis. Frases cortas.
+
+Estilo: números en formato español (coma decimal, punto de miles), con 2 decimales como máximo en precios y \
+porcentajes y los tipos en puntos básicos (pb). Fechas como «16/10». No uses nombres técnicos de campos \
+(«desviaciones_tipicas_dia», «M3»…) dentro del texto: los identificadores van solo en las listas de fuentes. \
+Un movimiento con más de 2 desviaciones típicas puede describirse como «inusualmente amplio». \
+En las hipótesis, el campo «si» empieza directamente por la condición, sin la palabra «si»."""
 
 SCHEMA = {
     "type": "object",
@@ -271,12 +293,16 @@ def _refs_html(refs: list[str], sources: dict) -> str:
             label = s.get("fuente") or s.get("titulo") or r
             parts.append(f'<a href="{_esc(s["url"])}" style="color:#6e7781">{_esc(r)} {_esc(label)[:40]}</a>')
         elif s.get("tipo") == "dato de mercado":
-            parts.append(f'{_esc(r)} {_esc(s.get("instrumento"))} ({_esc(s.get("fuente"))}, {_esc(s.get("fecha"))})')
+            parts.append(f'{_esc(r)} {_esc(s.get("instrumento"))} ({_esc(s.get("fuente"))}, {_esc(s.get("fecha_cierre"))})')
         elif s.get("tipo") == "evento de calendario":
             parts.append(f'{_esc(r)} calendario {_esc(s.get("fecha", "")[:10])}')
         else:
             parts.append(_esc(r))
     return f'<span style="color:#6e7781;font-size:12px"> · {"; ".join(parts)}</span>' if parts else ""
+
+
+def _no_si(text: str) -> str:
+    return re.sub(r"^\s*si\s+", "", text, flags=re.I)
 
 
 def render(analysis: dict) -> str:
@@ -297,7 +323,7 @@ def render(analysis: dict) -> str:
     hechos = [_esc(h["texto"]) + _refs_html(h["fuentes"], src) for h in res["hechos"]]
     interp = [f'{_esc(i["texto"])} <span style="color:#6e7781;font-size:12px">(confianza {_esc(i["confianza"])})</span>'
               + _refs_html(i["se_apoya_en"], src) for i in res["interpretaciones"]]
-    hyp = [f'<b>Si</b> {_esc(h["si"])}, <b>entonces</b> {_esc(h["entonces"])} '
+    hyp = [f'<b>Si</b> {_esc(_no_si(h["si"]))}, <b>entonces</b> {_esc(h["entonces"])} '
            f'<span style="color:#6e7781;font-size:12px">Horizonte: {_esc(h["horizonte"])}. '
            f'Se invalida si: {_esc(h["invalidacion"])}.</span>' + _refs_html(h["se_apoya_en"], src)
            for h in res["hipotesis"]]

@@ -412,7 +412,7 @@ def main() -> int:
         for title_, items in (("HECHOS", [f"{h['texto']} [{', '.join(h['fuentes'])}]" for h in res["hechos"]]),
                               ("INTERPRETACIÓN", [f"{i['texto']} (conf. {i['confianza']}) [{', '.join(i['se_apoya_en'])}]"
                                                  for i in res["interpretaciones"]]),
-                              ("HIPÓTESIS", [f"Si {h['si']} → {h['entonces']} ({h['horizonte']}; invalida: "
+                              ("HIPÓTESIS", [f"Si {ai_analysis._no_si(h['si'])} → {h['entonces']} ({h['horizonte']}; invalida: "
                                              f"{h['invalidacion']}) [{', '.join(h['se_apoya_en'])}]" for h in res["hipotesis"]]),
                               ("LIMITACIONES / DESCARTADO", res.get("limitaciones", []) + analysis["dropped"])):
             print(f"::notice::{title_}: " + " || ".join(items)[:3500])
