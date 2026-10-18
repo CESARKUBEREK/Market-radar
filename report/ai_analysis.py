@@ -226,7 +226,8 @@ históricos, situaciones S, tensiones entre activos. No describas lo que se movi
 histórico de cada activo: eso ya lo muestra el panorama. Si un hecho compara activos, que estén en la evidencia.
 3. INTERPRETACIONES (máx. 4): por qué podría importar, en condicional. Cruza activos y macro. No atribuyas un \
 movimiento a una noticia salvo que la noticia lo diga. Si hay explicaciones alternativas, dilas. Confianza: \
-«alta» solo si al menos dos datos distintos (no patrones) la apoyan y nada la contradice; si no, «media» o «baja».
+«alta» solo si al menos dos datos distintos la apoyan y nada la contradice; nunca si se apoya en patrones P o \
+situaciones S (no validadas). Si no, «media» o «baja».
 4. HIPÓTESIS (máx. 3): condición observable → consecuencia, con horizonte e invalidación. Los niveles de la \
 condición y de la invalidación deben salir de la evidencia (último, máximos, mínimos, niveles de las medias); la \
 invalidación no puede solaparse con la condición.
@@ -470,6 +471,11 @@ def validate(result: dict, known: set[str], evidence: dict | None = None) -> tup
     for it in result.get("interpretaciones", []):
         refs = ok_refs(it.get("se_apoya_en", []))
         if refs:
+            # Lo que descansa en patrones o en señales no validadas no puede tener confianza alta
+            if it.get("confianza") == "alta" and any(r[0] in "PS" and r[1:].isdigit() for r in refs):
+                it = {**it, "confianza": "media"}
+                dropped.append(f"confianza rebajada a media (se apoya en patrones o señales no validadas): "
+                               f"{it.get('texto', '')[:60]}")
             interp.append({**it, "se_apoya_en": refs})
         else:
             dropped.append(f"interpretación sin apoyo: {it.get('texto', '')[:80]}")
