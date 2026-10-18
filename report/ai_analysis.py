@@ -494,7 +494,7 @@ def render(analysis: dict) -> str:
         sit.append(f'<b style="color:{color}">{_esc(sg.get("titulo", ""))}</b> '
                    f'<span style="color:#6e7781;font-size:12px">({_esc(sg.get("naturaleza", ""))})</span><br>'
                    f'{_esc(x["lectura"])}' + _refs_html([r for r in x["fuentes"] if r != x["senal"]], src))
-    return (label + block("Situaciones excepcionales: qué significan", "#cf222e", sit)
+    return (label + block("Situaciones excepcionales (descriptivo, no validado): qué significan", "#cf222e", sit)
             + block("Hechos: qué ha ocurrido y qué lo confirma", "#1f2328", hechos) + panorama_html
             + block("Interpretación: por qué podría importar", "#0550ae", interp)
             + block("Hipótesis: qué podría pasar y bajo qué condiciones", "#8250df", hyp)

@@ -1,5 +1,10 @@
 """Detector de situaciones excepcionales (reglas fijas, sin IA). Versión exceptional-v1.1.
 
+Capa DESCRIPTIVA de la Vía A, sin validación estadística. No es el radar de fragilidad de la
+Vía B (Anexo A: puntuaciones F de combustible y S de chispa, umbrales congelados, presupuesto de
+alertas e histéresis), que solo entra en producción si supera el backtest B1. Los datos que usa
+(COT, financiación, interés abierto, flujos de ETF, volumen) sirven de base para ese backtest.
+
 A. Posicionamiento extremo (COT de la CFTC): posición neta de fondos gestionados, fondos
    apalancados o gestoras en percentil ≥ 95 o ≤ 5 de los últimos 5 años, o un cambio semanal
    inusual. No anticipa la dirección del precio: indica sensibilidad a noticias.

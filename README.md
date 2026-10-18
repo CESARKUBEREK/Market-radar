@@ -42,6 +42,9 @@ Para añadir un par de correlación basta con insertar una fila en `analysis_pai
 
 ## Situaciones excepcionales (exceptional-v1.1)
 
+Capa descriptiva de la Vía A, sin validación estadística: **no es el radar de fragilidad de la Vía B**
+(Anexo A), que solo se publicará si supera el backtest B1. Sus datos sirven de base para ese backtest.
+
 `report/exceptional.py` aplica reglas fijas antes del informe y guarda cada señal en `alerts`
 (`rule_id` exc_A … exc_E, `kind` informative). El análisis con IA las explica, pero no las crea.
 

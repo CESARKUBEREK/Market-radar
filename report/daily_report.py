@@ -295,13 +295,14 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str,
     return title, html_doc, content
 
 
+EXC_TITLE = "Situaciones excepcionales (descriptivo, no validado)"
 EXC_TYPES = {"A": "Posicionamiento extremo", "B": "Posible liquidación", "C": "Exceso de apalancamiento",
              "D": "Flujos de capital", "E": "Movimiento anómalo"}
 
 
 def compose_exceptional(signals: list[dict]) -> str:
     if not signals:
-        return section("Situaciones excepcionales", f'<p style="font-size:13px;color:{GREY}">Ninguna hoy según las '
+        return section(EXC_TITLE, f'<p style="font-size:13px;color:{GREY}">Ninguna hoy según las '
                                                      "reglas exceptional-v1.1.</p>")
     rows = []
     for s in signals[:15]:
@@ -311,10 +312,12 @@ def compose_exceptional(signals: list[dict]) -> str:
                      f'<b>{esc(s["titulo"])}</b><br><span style="font-size:12px">{esc(s["detalle"])}</span>'
                      f'<br><span style="font-size:11px;color:{GREY}">Fuente: {esc(", ".join(s["fuentes"]))} · '
                      f'dato del {esc(s["fecha_dato"][:10])}</span>'])
-    note = (f'<p style="font-size:11px;color:{GREY};margin:6px 0 0">Reglas fijas (exceptional-v1.1). «Compatible con» '
+    note = (f'<p style="font-size:11px;color:{GREY};margin:6px 0 0">Capa descriptiva de la Vía A con reglas fijas '
+            "(exceptional-v1.1), sin validación estadística. No es el radar de fragilidad de la Vía B (puntuaciones "
+            "de combustible y chispa del Anexo A), que solo se publicará si supera su backtest. «Compatible con» "
             "indica un patrón coherente con esa situación, no su confirmación. El COT refleja posiciones del martes, "
             "publicadas el viernes.</p>")
-    return section("Situaciones excepcionales", table(["Tipo", "Señal"], rows, align_right_from=99) + note)
+    return section(EXC_TITLE, table(["Tipo", "Señal"], rows, align_right_from=99) + note)
 
 
 AGENDA_DAYS = 7
