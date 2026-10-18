@@ -84,3 +84,4 @@ tr:hover td { background: var(--panel); }
   .two-col { grid-template-columns: 1fr; }
   h1 { font-size: 19px; }
 }
+tr.strong td { font-weight: 600; }

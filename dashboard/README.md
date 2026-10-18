@@ -12,6 +12,7 @@ Aplicación Next.js de solo lectura sobre la base de datos Market Radar (Supabas
 | `/activo/[id]` | Ficha de instrumento: histórico desde 2020, estadísticas y alertas |
 | `/macro` | Liquidez neta de la Fed, componentes, M2, fondos federales, NFCI, reservas de oro y deuda/PIB |
 | `/alertas` | Historial de alertas con filtros |
+| `/agenda` | Próximos eventos (Fed, BCE, datos de EE. UU., festivos, vencimientos) y noticias oficiales |
 | `/correlaciones` | Correlaciones de 60 sesiones y su evolución |
 | `/informes` | Informes diarios guardados |
 

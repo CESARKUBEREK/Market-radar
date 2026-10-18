@@ -127,6 +127,13 @@ def load(db: Supabase, report_date: dt.date) -> dict:
         "alerts": db.select("alerts", {
             "select": "as_of,rule_id,title,kind", "as_of": f"gte.{since}",
             "order": "as_of.desc,rule_id"}),
+        "events": db.select("events_calendar", {
+            "select": "event_at,kind,notes,country_code", "event_at": f"gte.{report_date.isoformat()}",
+            "order": "event_at", "limit": "200"}),
+        "news": db.select("news", {
+            "select": "title,source_name,url,published_at,relevance",
+            "published_at": f"gte.{(report_date - dt.timedelta(days=3)).isoformat()}",
+            "relevance": "gte.50", "order": "relevance.desc,published_at.desc", "limit": "8"}),
         "sync": db.select("provider_sync_logs", {
             "select": "source_id,status,started_at,error", "order": "started_at.desc", "limit": "30"}),
     }
@@ -169,6 +176,17 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str) -> tuple[str, 
         rows = [[esc(a["as_of"]), esc(RULE_LABELS.get(a["rule_id"], a["rule_id"])), esc(a["title"])]
                 for a in recent_alerts]
         body.append(section("Alertas", table(["Fecha", "Tipo", "Detalle"], rows, align_right_from=99)))
+
+    # Agenda de la semana y noticias oficiales relevantes
+    agenda = compose_agenda(data.get("events") or [], report_date)
+    if agenda:
+        body.append(agenda)
+    if data.get("news"):
+        rows = [[esc(fmt_day(n["published_at"])), esc(n["source_name"]),
+                 f'<a href="{esc(n["url"])}" style="color:{INK}">{esc(n["title"])}</a>']
+                for n in data["news"]]
+        body.append(section("Noticias oficiales relevantes", table(["Fecha", "Fuente", "Titular"], rows,
+                                                                    align_right_from=99)))
 
     # Mercados por categoría
     for cat, label in CATEGORIES:
@@ -243,6 +261,29 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str) -> tuple[str, 
     content = {"movers": [m["instrument"] for m in movers], "alerts": len(recent_alerts),
                "stale": stale, "failed_sources": failed}
     return title, html_doc, content
+
+
+AGENDA_DAYS = 7
+AGENDA_KINDS = {"fomc": "Fed", "cpi": "Inflación", "employment": "Empleo", "other": "Macro",
+                "holiday": "Festivo", "expiry": "Vencimiento", "rebalance": "Rebalanceo", "roll": "WTI"}
+WEEKDAYS = ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"]
+
+
+def fmt_day(iso: str, with_time: bool = False) -> str:
+    d = dt.datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(PARIS)
+    out = f"{WEEKDAYS[d.weekday()]} {d.day:02d}/{d.month:02d}"
+    return out + (f" {d.hour:02d}:{d.minute:02d}" if with_time else "")
+
+
+def compose_agenda(events: list[dict], report_date: dt.date) -> str:
+    end = (report_date + dt.timedelta(days=AGENDA_DAYS)).isoformat()
+    rows = [[esc(fmt_day(e["event_at"], e["kind"] != "holiday")), esc(AGENDA_KINDS.get(e["kind"], e["kind"])),
+             esc(e.get("notes") or "")]
+            for e in events if e["event_at"][:10] < end]
+    if not rows:
+        return ""
+    return section(f"Agenda de los próximos {AGENDA_DAYS} días (hora de París)",
+                   table(["Cuándo", "Tipo", "Evento"], rows, align_right_from=99))
 
 
 COUNTRY = {"USA": "Estados Unidos", "DEU": "Alemania", "ITA": "Italia", "FRA": "Francia", "CHN": "China",

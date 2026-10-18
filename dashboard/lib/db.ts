@@ -160,3 +160,28 @@ export async function getSyncStatus() {
   return [...latest.values()] as { source_id: string; status: string; started_at: string;
     finished_at: string | null; rows_imported: number | null }[];
 }
+
+export type CalendarEvent = { id: number; event_at: string; kind: string; instrument_id: string | null;
+  country_code: string | null; source_id: string; suppresses_signals: boolean; notes: string | null };
+
+export async function getEvents(fromIso: string, toIso: string, kinds?: string[]) {
+  return all<CalendarEvent>((c) => {
+    let q = c.from("events_calendar").select("*").gte("event_at", fromIso).lte("event_at", toIso);
+    if (kinds?.length) q = q.in("kind", kinds);
+    return q.order("event_at").order("id");
+  });
+}
+
+export type NewsItem = { id: number; title: string; source_name: string; url: string; published_at: string;
+  summary: string | null; categories: string[]; relevance: number;
+  news_instruments: { instrument_id: string }[] };
+
+export async function getNews(sinceIso: string, minRelevance = 0, limit = 200) {
+  const c = await db();
+  const { data, error } = await c.from("news")
+    .select("id,title,source_name,url,published_at,summary,categories,relevance,news_instruments(instrument_id)")
+    .gte("published_at", sinceIso).gte("relevance", minRelevance)
+    .order("published_at", { ascending: false }).limit(limit);
+  if (error) throw new Error(error.message);
+  return (data ?? []) as NewsItem[];
+}

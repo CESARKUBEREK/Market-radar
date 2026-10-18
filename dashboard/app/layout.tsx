@@ -12,6 +12,7 @@ const NAV = [
   ["/", "Mercados"],
   ["/macro", "Macro"],
   ["/alertas", "Alertas"],
+  ["/agenda", "Agenda"],
   ["/correlaciones", "Correlaciones"],
   ["/informes", "Informes"],
 ] as const;
