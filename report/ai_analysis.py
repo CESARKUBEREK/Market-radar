@@ -1,33 +1,29 @@
 """Análisis con IA para el informe diario: Hechos, Interpretación e Hipótesis.
 
-Tres pasos, para que la IA no pueda inventar datos ni causas:
+Dos pasos, para que la IA no pueda inventar datos ni causas:
 
 1. Evidencia (determinista, sin IA). Se reúnen con un identificador cada uno:
    M = movimientos de mercado de la última sesión (vistas de Supabase),
    A = alertas, C = eventos del calendario (publicados y próximos),
-   N = noticias oficiales guardadas, P = patrones de movimientos conjuntos
-   detectados por reglas (p. ej. «suben los rendimientos y cae el oro»), con los
-   temas que conviene buscar (inflación, política monetaria, dólar…).
-2. Investigación (IA + búsqueda web, opcional). Claude busca noticias sobre esos
-   temas en medios y organismos de la lista ALLOWED_DOMAINS. Cada fuente web que
-   cite recibe un identificador W.
-3. Redacción estructurada (IA, sin herramientas, salida JSON con esquema). Cada
-   hecho debe citar identificadores de evidencia; el código descarta los que no
-   lo hagan, así como las interpretaciones e hipótesis sin apoyo.
+   N = noticias oficiales guardadas (Fed, BCE, Banco de Inglaterra),
+   P = patrones de movimientos conjuntos detectados por reglas (p. ej. «suben los
+   rendimientos y cae el oro»), con los temas que conviene contrastar.
+2. Redacción estructurada con la API de OpenAI (Responses API, salida JSON con
+   esquema estricto, sin búsqueda web). Cada hecho debe citar identificadores de
+   evidencia; el código descarta los que no lo hagan, así como las
+   interpretaciones e hipótesis sin apoyo.
 
 Reglas que se imponen en la instrucción y se comprueban donde se puede:
-- Un hecho solo es lo que dicen los datos o una fuente citada.
-- No se afirma que una noticia causó un movimiento salvo que una fuente lo diga
-  expresamente; en ese caso se atribuye («según Reuters…»). Si no, se habla de
-  coincidencia temporal.
+- Un hecho solo es lo que dicen los datos o una noticia citada.
+- No se afirma que una noticia causó un movimiento salvo que la propia noticia lo
+  diga; si no, se habla de coincidencia temporal.
 - Las hipótesis son condicionales («si…, entonces…») e incluyen qué las invalidaría.
 - Nada de recomendaciones de compra o venta.
 
 Variables de entorno:
-  ANTHROPIC_API_KEY        obligatoria para activar el análisis
-  ANALYSIS_MODEL           por defecto claude-sonnet-5-5
-  ANALYSIS_WEB_SEARCH      'true' para activar la búsqueda web (desactivada por defecto)
-  ANALYSIS_MAX_SEARCHES    por defecto 5
+  OPENAI_API_KEY      obligatoria para activar el análisis
+  ANALYSIS_MODEL      por defecto gpt-5.4-mini
+  ANALYSIS_EFFORT     esfuerzo de razonamiento: none, low (por defecto), medium, high
 """
 
 from __future__ import annotations
@@ -40,14 +36,8 @@ import time
 
 import requests
 
-API = "https://api.anthropic.com/v1/messages"
-DEFAULT_MODEL = "claude-sonnet-5-5"
-ALLOWED_DOMAINS = [
-    "reuters.com", "apnews.com", "bloomberg.com", "ft.com", "wsj.com", "cnbc.com", "marketwatch.com",
-    "economist.com", "nikkei.com", "scmp.com", "handelsblatt.com", "lesechos.fr", "expansion.com",
-    "federalreserve.gov", "ecb.europa.eu", "bankofengland.co.uk", "treasury.gov", "bls.gov", "bea.gov",
-    "imf.org", "eia.gov", "opec.org", "cmegroup.com", "sec.gov", "ambito.com", "lanacion.com.ar",
-]
+API = "https://api.openai.com/v1/responses"
+DEFAULT_MODEL = "gpt-5.4-mini"
 SOURCE_LABEL = {"fred": "FRED", "tiingo": "Tiingo", "ecb": "BCE", "yahoo": "Yahoo (no oficial)",
                 "euronext": "Euronext", "imf": "FMI", "manual": "manual"}
 EVENT_LABEL = {"fomc": "Fed", "cpi": "IPC", "employment": "Empleo", "other": "Macro", "holiday": "Festivo",
@@ -142,41 +132,31 @@ def build_evidence(data: dict, report_date: dt.date) -> dict:
     return ev
 
 
-# --- llamadas a la API ------------------------------------------------------ #
+# --- llamada a la API ------------------------------------------------------- #
 def _call(payload: dict, key: str) -> dict:
-    headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     for attempt in range(4):
         r = requests.post(API, headers=headers, data=json.dumps(payload), timeout=300)
-        if r.status_code in (429, 500, 502, 503, 529):
+        if r.status_code in (429, 500, 502, 503):
             time.sleep(15 * 2 ** attempt)
             continue
         if not r.ok:
-            raise RuntimeError(f"API de Anthropic HTTP {r.status_code}: {r.text[:300]}")
+            raise RuntimeError(f"API de OpenAI HTTP {r.status_code}: {r.text[:300]}")
         return r.json()
-    raise RuntimeError("La API de Anthropic no respondió tras 4 intentos")
+    raise RuntimeError("La API de OpenAI no respondió tras 4 intentos")
 
-
-RESEARCH_SYSTEM = """Eres un analista de mercados que documenta, no que opina. Recibes evidencia numerada \
-(datos de mercado M, patrones P, alertas A, calendario C, noticias oficiales N) del cierre más reciente.
-
-Tu tarea: buscar en la web noticias de los últimos 3 días que puedan estar relacionadas con los movimientos \
-más fuertes y con los patrones P (usa sus «temas_a_buscar»). Prioriza agencias y organismos oficiales.
-
-Escribe notas breves en español, una por tema, diciendo qué publican las fuentes y con qué fecha. \
-Distingue siempre entre lo que una fuente AFIRMA (p. ej. «Reuters atribuye la subida a…») y una mera \
-coincidencia temporal. Si no encuentras nada relevante para un tema, dilo. No inventes cifras; las cifras \
-de mercado ya están en M."""
 
 STRUCTURE_SYSTEM = """Redactas la sección «Análisis» del informe diario de Market Radar, en español, para uso \
 personal. Separa estrictamente tres niveles:
 
 HECHOS: qué ha ocurrido y qué fuentes lo confirman. Solo afirmaciones verificables en la evidencia (M, A, C, N, \
-P solo como descripción de movimientos) o en fuentes web (W). Cada hecho cita sus identificadores en «fuentes». \
+P solo como descripción de movimientos). Cada hecho cita sus identificadores en «fuentes». \
 Cifras exactas tal como aparecen en la evidencia, con fecha. Un patrón P no es un hecho causal.
 
 INTERPRETACIONES: por qué podría ser relevante para el mercado. Usa condicional («podría», «es coherente con»). \
 Cada una se apoya en identificadores de hechos o evidencia. NO afirmes que una noticia provocó un movimiento salvo \
-que una fuente W o N lo diga expresamente; entonces atribúyelo («según …»). Si varias explicaciones son posibles, \
+que la propia noticia N lo diga expresamente; entonces atribúyelo («según …»). Sin esa evidencia, habla de \
+coincidencia temporal. Si varias explicaciones son posibles, \
 dilo. Indica la confianza: baja, media o alta.
 
 HIPÓTESIS: consecuencias posibles si se cumplen condiciones observables. Formato «si … entonces …», con \
@@ -209,52 +189,25 @@ SCHEMA = {
 }
 
 
-def research(evidence: dict, model: str, key: str, max_searches: int) -> tuple[str, dict, dict]:
-    """Devuelve notas con marcas [Wn], el diccionario de fuentes web y el uso de la API."""
-    messages = [{"role": "user", "content": "Evidencia:\n" + json.dumps(evidence, ensure_ascii=False)}]
-    payload = {"model": model, "max_tokens": 3000, "system": RESEARCH_SYSTEM, "messages": messages,
-               "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": max_searches,
-                          "allowed_domains": ALLOWED_DOMAINS}]}
-    usage = {"input_tokens": 0, "output_tokens": 0, "web_search_requests": 0}
-    content: list = []
-    for _ in range(4):                       # pause_turn: se reenvía el turno pausado
-        resp = _call(payload, key)
-        u = resp.get("usage") or {}
-        usage["input_tokens"] += u.get("input_tokens", 0)
-        usage["output_tokens"] += u.get("output_tokens", 0)
-        usage["web_search_requests"] += (u.get("server_tool_use") or {}).get("web_search_requests", 0)
-        content = resp.get("content") or []
-        if resp.get("stop_reason") != "pause_turn":
-            break
-        payload["messages"] = messages + [{"role": "assistant", "content": content}]
-    web: dict[str, dict] = {}
-    by_url: dict[str, str] = {}
-    notes = []
-    for block in content:
-        if block.get("type") != "text":
-            continue
-        refs = []
-        for c in block.get("citations") or []:
-            url = c.get("url")
-            if not url:
-                continue
-            if url not in by_url:
-                wid = f"W{len(by_url) + 1}"
-                by_url[url] = wid
-                web[wid] = {"tipo": "fuente web", "titulo": c.get("title"), "url": url,
-                            "cita": c.get("cited_text")}
-            refs.append(by_url[url])
-        notes.append(block["text"] + (f" [{', '.join(dict.fromkeys(refs))}]" if refs else ""))
-    return "".join(notes).strip(), web, usage
-
-
-def structure(evidence: dict, notes: str, web: dict, model: str, key: str) -> tuple[dict, dict]:
-    body = {"evidencia": evidence, "fuentes_web": web, "notas_de_investigacion": notes or "(sin búsqueda web)"}
-    payload = {"model": model, "max_tokens": 3000, "system": STRUCTURE_SYSTEM,
-               "messages": [{"role": "user", "content": json.dumps(body, ensure_ascii=False)}],
-               "output_config": {"format": {"type": "json_schema", "schema": SCHEMA}}}
+def structure(evidence: dict, model: str, key: str, effort: str) -> tuple[dict, dict]:
+    payload = {"model": model, "instructions": STRUCTURE_SYSTEM,
+               "input": json.dumps({"evidencia": evidence}, ensure_ascii=False),
+               "text": {"format": {"type": "json_schema", "name": "analisis_diario", "strict": True,
+                                   "schema": SCHEMA}},
+               "max_output_tokens": 6000}
+    if effort and effort != "none":
+        payload["reasoning"] = {"effort": effort}
     resp = _call(payload, key)
-    text = "".join(b.get("text", "") for b in resp.get("content") or [] if b.get("type") == "text")
+    if resp.get("status") not in (None, "completed"):
+        raise RuntimeError(f"Respuesta incompleta de OpenAI: {resp.get('status')} "
+                           f"{(resp.get('incomplete_details') or {}).get('reason', '')}")
+    text = ""
+    for item in resp.get("output") or []:
+        for c in item.get("content") or []:
+            if c.get("type") == "refusal":
+                raise RuntimeError(f"El modelo rechazó la petición: {c.get('refusal', '')[:200]}")
+            if c.get("type") == "output_text":
+                text += c.get("text", "")
     return json.loads(text), resp.get("usage") or {}
 
 
@@ -292,22 +245,17 @@ def validate(result: dict, known: set[str]) -> tuple[dict, list[str]]:
 
 def run(data: dict, report_date: dt.date) -> dict | None:
     """Análisis completo, o None si no hay clave. Los errores se propagan al llamador."""
-    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not key:
         return None
     model = os.environ.get("ANALYSIS_MODEL", "").strip() or DEFAULT_MODEL
-    use_web = os.environ.get("ANALYSIS_WEB_SEARCH", "false").strip().lower() == "true"
-    max_searches = int(os.environ.get("ANALYSIS_MAX_SEARCHES", "5") or 5)
+    effort = os.environ.get("ANALYSIS_EFFORT", "").strip() or "low"
     evidence = build_evidence(data, report_date)
-    notes, web, usage = ("", {}, {"input_tokens": 0, "output_tokens": 0, "web_search_requests": 0})
-    if use_web:
-        notes, web, usage = research(evidence, model, key, max_searches)
-    result, u2 = structure(evidence, notes, web, model, key)
-    clean, dropped = validate(result, set(evidence) | set(web))
-    usage["input_tokens"] += u2.get("input_tokens", 0)
-    usage["output_tokens"] += u2.get("output_tokens", 0)
-    return {"model": model, "result": clean, "dropped": dropped, "sources": {**evidence, **web},
-            "usage": usage, "web_search": use_web}
+    result, usage = structure(evidence, model, key, effort)
+    clean, dropped = validate(result, set(evidence))
+    return {"model": model, "result": clean, "dropped": dropped, "sources": evidence,
+            "usage": {"input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens")},
+            "web_search": False}
 
 
 # --- HTML -------------------------------------------------------------------- #

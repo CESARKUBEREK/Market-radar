@@ -3,8 +3,8 @@
 lo guarda en `daily_reports` y lo envía por correo con Gmail (SMTP).
 
 Todo el contenido es determinista (vistas y alertas ya calculadas), salvo la
-sección «Análisis», que redacta Claude con la evidencia del propio informe y una
-búsqueda web acotada (ai_analysis.py). Sin ANTHROPIC_API_KEY esa sección se omite.
+sección «Análisis», que redacta un modelo de OpenAI solo con la evidencia del propio
+informe (ai_analysis.py). Sin OPENAI_API_KEY esa sección se omite.
 
 Se envía de lunes a viernes. El sábado no se envía salvo con --force.
 
@@ -15,7 +15,7 @@ Variables de entorno:
   DASHBOARD_URL    opcional, enlace al dashboard
   REPORT_FORCE=true  enviar aunque sea fin de semana
   REPORT_DRY_RUN=true  componer y guardar, sin enviar
-  ANTHROPIC_API_KEY, ANALYSIS_MODEL, ANALYSIS_WEB_SEARCH  análisis con IA (opcional)
+  OPENAI_API_KEY, ANALYSIS_MODEL, ANALYSIS_EFFORT  análisis con IA (opcional)
 """
 
 from __future__ import annotations
@@ -391,9 +391,9 @@ def main() -> int:
             print(f"::notice::Análisis IA: {len(analysis['result']['hechos'])} hechos, "
                   f"{len(analysis['result']['interpretaciones'])} interpretaciones, "
                   f"{len(analysis['result']['hipotesis'])} hipótesis; descartados {len(analysis['dropped'])}; "
-                  f"tokens {u.get('input_tokens')}/{u.get('output_tokens')}, búsquedas {u.get('web_search_requests')}")
+                  f"tokens {u.get('input_tokens')}/{u.get('output_tokens')}")
         else:
-            print("Análisis IA desactivado: falta ANTHROPIC_API_KEY.")
+            print("Análisis IA desactivado: falta OPENAI_API_KEY.")
     except Exception as exc:          # el informe sale igual, sin análisis
         analysis_error = str(exc)
         print(f"::warning::Análisis IA no disponible: {analysis_error[:300]}")
