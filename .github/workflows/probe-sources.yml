@@ -33,8 +33,12 @@ jobs:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: python tools/probe_sources.py events
       - name: COT, ETF y volumen
+        if: false
         env:
           TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
         run: python tools/probe_sources.py flows
       - name: Derivados cripto
+        if: false
         run: python tools/probe_sources.py crypto
+      - name: ETF
+        run: pip install openpyxl && python tools/probe_sources.py etf

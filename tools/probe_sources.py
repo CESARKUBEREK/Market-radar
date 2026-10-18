@@ -224,6 +224,9 @@ def flows(part: str) -> None:
     if part == "crypto":
         _crypto(_json)
         return
+    if part == "etf":
+        _etf()
+        return
     for ds, code, name in [("72hh-3qpy", "088691", "disagg oro"), ("gpe5-46if", "13874A", "tff sp500"),
                            ("6dca-aqww", "133741", "legacy btc cme")]:
         try:
@@ -265,16 +268,33 @@ def _crypto(_json) -> None:
 
 def _etf() -> None:
     etf = {
-        "gld archivo": "https://www.spdrgoldshares.com/assets/dynamic/GLD/GLD_US_archive_EN.csv",
-        "spy navhist": "https://www.ssga.com/us/en/intermediary/library-content/products/fund-data/etfs/us/navhist-us-en-spy.xlsx",
-        "ibit ishares": "https://www.ishares.com/us/products/333011/ishares-bitcoin-trust-etf/1467271812596.ajax?tab=all&fileType=json",
-        "farside btc": "https://farside.co.uk/bitcoin-etf-flow-all-data/",
+        "gld ssga navhist": "https://www.ssga.com/us/en/intermediary/library-content/products/fund-data/etfs/us/navhist-us-en-gld.xlsx",
+        "ibit xls": "https://www.ishares.com/us/products/333011/ishares-bitcoin-trust-etf/1467271812596.ajax?fileType=xls&fileName=iShares-Bitcoin-Trust-ETF_fund&dataType=fund",
+        "iau xls": "https://www.ishares.com/us/products/239561/ishares-gold-trust-fund/1467271812596.ajax?fileType=xls&fileName=iShares-Gold-Trust_fund&dataType=fund",
+        "qqq invesco": "https://www.invesco.com/us/financial-products/etfs/holdings/main/holdings/0?audienceType=Investor&action=download&ticker=QQQ",
     }
     for name, url in etf.items():
         try:
             r = requests.get(url, headers=UA, timeout=60)
             ct = r.headers.get("content-type", "")
             body = r.text[:300].replace("\n", " ") if "text" in ct or "json" in ct or "csv" in ct else f"<{len(r.content)} bytes>"
+            if "ishares" in url and r.ok:
+                import re as _re
+                t = r.content.decode("utf-8", "ignore")
+                sheets = _re.findall(r'ss:Name="([^"]+)"', t)
+                hist = t[t.find("Historical"):][:3000]
+                cells = _re.findall(r"<ss:Data[^>]*>([^<]*)</ss:Data>", hist)
+                body = f"hojas {sheets}; histórico: {cells[:24]}"
+            if url.endswith(".xlsx") and r.ok:
+                import io as _io
+                try:
+                    import openpyxl
+                    wb = openpyxl.load_workbook(_io.BytesIO(r.content), read_only=True)
+                    ws = wb.worksheets[0]
+                    rows = [[c for c in row] for row in ws.iter_rows(max_row=6, values_only=True)]
+                    body = f"hojas {wb.sheetnames}; {rows}"
+                except Exception as e2:
+                    body += f" (openpyxl: {e2})"
             report(f"etf {name}", r.ok, f"HTTP {r.status_code} {ct[:40]} {body}")
         except Exception as exc:
             report(f"etf {name}", False, str(exc)[:200])
@@ -298,7 +318,7 @@ def main() -> int:
         imf()
     elif group == "events":
         events()
-    elif group in ("flows", "crypto"):
+    elif group in ("flows", "crypto", "etf"):
         flows(group)
     elif group == "public":
         euronext("FR0000121329-XPAR")
