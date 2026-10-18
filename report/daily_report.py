@@ -170,7 +170,7 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str) -> tuple[str, 
             continue
         rows = [[esc(s["instrument"]) + (' <span style="color:%s">(atrasado)</span>' % RED
                                          if (s.get("days_since_last") or 0) > STALE_DAYS else ""),
-                 price(s["last_value"]) + (" %" if s["is_rate"] else ""),
+                 (num(s["last_value"], 2) + " %") if s["is_rate"] else price(s["last_value"]),
                  chg(s.get("chg_1d"), s["is_rate"]), chg(s.get("chg_1w"), s["is_rate"]),
                  chg(s.get("chg_1m"), s["is_rate"]), chg(s.get("chg_ytd"), s["is_rate"]),
                  num(s.get("vol_20"), 1) + (" pp" if s["is_rate"] else " %"),
