@@ -80,6 +80,10 @@ class Supabase:
         )
         r.raise_for_status()
 
+    def rpc(self, function: str, args: dict | None = None) -> None:
+        r = self.session.post(f"{self.base}/rpc/{function}", data=json.dumps(args or {}), timeout=300)
+        r.raise_for_status()
+
     # --- helpers de alto nivel ------------------------------------------- #
     def catalog(self, source_id: str, wanted: str = "") -> list[dict]:
         """Series del catálogo de una fuente, opcionalmente filtradas por ID."""
@@ -145,5 +149,11 @@ def run_catalog(db: Supabase, source_id: str, mode: str, catalog: list[dict], in
             print(f"FAIL {s['id']:<22} {exc}")
             print(f"::error::{source_id} {s['id']}: {str(exc)[:300]}")
     status = db.finish_log(log_id, mode, results, errors)
+    if any(r.get("rows") for r in results.values()):
+        try:
+            db.rpc("refresh_analysis")   # vistas materializadas de análisis (A2)
+            print("Análisis refrescado.")
+        except Exception as exc:
+            print(f"::warning::No se pudo refrescar el análisis: {str(exc)[:200]}")
     print(f"{source_id}: {status}. Series correctas: {len(results)}, con error: {len(errors)}.")
     return 1 if errors else 0

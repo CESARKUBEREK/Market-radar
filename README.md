@@ -24,6 +24,22 @@ Reglas comunes:
   guardan una sola versión por fecha; no sirven para un backtest point-in-time.
 - Cada ejecución queda registrada en `provider_sync_logs`.
 
+## Análisis (A2)
+
+Vistas en Supabase, todas deterministas (parámetros en `rule_versions`, id `derived-v1.0`):
+
+| Vista | Contenido |
+| --- | --- |
+| `v_market_summary` | Último cierre, variación 1 día / 1 semana / 1 mes / 3 meses / año, volatilidad anualizada 20 y 60 sesiones, rango de 52 semanas, días desde el último dato |
+| `v_returns` | Rendimiento diario: logarítmico en precios, diferencia en puntos en tipos |
+| `v_net_liquidity` | Liquidez neta de la Fed (WALCL − TGA − repos inversos), semanal, en miles de millones de USD |
+| `v_m2` | M2 con variación mensual e interanual |
+| `v_correlations`, `v_correlations_latest` | Correlación móvil de 60 sesiones de los pares de `analysis_pairs` |
+
+`mv_observations_latest`, `mv_returns` y `mv_correlations` son vistas
+materializadas; cada ingesta las refresca al terminar con `refresh_analysis()`.
+Para añadir un par de correlación basta con insertar una fila en `analysis_pairs`.
+
 ## Puesta en marcha
 
 Secretos del repositorio (**Settings → Secrets and variables → Actions**):
