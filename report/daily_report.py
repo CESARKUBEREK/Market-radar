@@ -490,4 +490,11 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception:
+        import traceback
+        tb = traceback.format_exc()
+        print(tb)
+        print("::error::Informe diario: " + " | ".join(tb.strip().splitlines()[-6:])[:900])
+        sys.exit(1)
