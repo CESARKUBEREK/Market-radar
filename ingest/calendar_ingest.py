@@ -92,18 +92,19 @@ def fomc(today: dt.date) -> list[dict]:
 
 # --- FRED ----------------------------------------------------------------- #
 def fred_releases(today: dt.date, key: str) -> list[dict]:
-    r = requests.get("https://api.stlouisfed.org/fred/releases/dates", params={
-        "api_key": key, "file_type": "json", "realtime_start": today.isoformat(),
-        "realtime_end": (today + dt.timedelta(days=HORIZON_DAYS)).isoformat(),
-        "include_release_dates_with_no_data": "true", "limit": 1000, "sort_order": "asc"}, timeout=60)
-    r.raise_for_status()
+    # Por publicación: el endpoint general solo devuelve la próxima fecha de cada una.
     out = []
-    for d in r.json().get("release_dates", []):
-        spec = FRED_RELEASES.get(d.get("release_id"))
-        if spec:
-            kind, title, t = spec
-            out.append(event(kind, dt.datetime.combine(dt.date.fromisoformat(d["date"]), t, NY), "fred",
-                             title, country="US"))
+    end = today + dt.timedelta(days=HORIZON_DAYS)
+    for release_id, (kind, title, t) in FRED_RELEASES.items():
+        r = requests.get("https://api.stlouisfed.org/fred/release/dates", params={
+            "api_key": key, "file_type": "json", "release_id": release_id,
+            "realtime_start": "1776-07-04", "realtime_end": "9999-12-31",
+            "include_release_dates_with_no_data": "true", "sort_order": "desc", "limit": 60}, timeout=60)
+        r.raise_for_status()
+        for d in r.json().get("release_dates", []):
+            day = dt.date.fromisoformat(d["date"])
+            if today <= day <= end:
+                out.append(event(kind, dt.datetime.combine(day, t, NY), "fred", title, country="US"))
     if not out:
         raise ValueError("FRED no devolvió fechas de publicación programadas")
     return out
