@@ -41,6 +41,8 @@ NEW_YORK = ZoneInfo("America/New_York")
 SOURCE_ID = "fred"
 UPSERT_CHUNK = 1000
 FRED_PAGE = 100_000
+VINTAGE_PAGE = 10_000
+MAX_VINTAGES_PER_REQUEST = 2000   # límite de FRED por petición de observaciones
 REALTIME_LOOKBACK_DAYS = 10    # modo incremental: vintages publicadas en estos días
 DAILY_LOOKBACK_DAYS = 400      # modo incremental: ventana de observaciones de series diarias
 FULL_REALTIME_START = "1776-07-04"
@@ -135,16 +137,53 @@ def fred_get(path: str, api_key: str, **params) -> dict:
 # --------------------------------------------------------------------------- #
 # Lógica de FRED
 # --------------------------------------------------------------------------- #
+def fetch_vintage_dates(api_key: str, code: str, realtime_start: str) -> list[str]:
+    """Fechas en que FRED publicó una versión de la serie (ALFRED)."""
+    out: list[str] = []
+    offset = 0
+    while True:
+        data = fred_get("series/vintagedates", api_key, series_id=code,
+                        realtime_start=realtime_start, realtime_end=REALTIME_END,
+                        limit=VINTAGE_PAGE, offset=offset, sort_order="asc")
+        page = data.get("vintage_dates", [])
+        out.extend(page)
+        offset += len(page)
+        if not page or offset >= int(data.get("count", len(out))):
+            return out
+
+
+def realtime_windows(vintage_dates: list[str], realtime_start: str) -> list[tuple[str, str]]:
+    """Parte el periodo en ventanas de como máximo MAX_VINTAGES_PER_REQUEST vintages.
+
+    FRED rechaza una petición que abarque más de 2000 fechas de vintage. Cada
+    ventana empieza en una fecha de vintage y termina el día antes de la
+    siguiente ventana, así que no se solapan ni dejan huecos.
+    """
+    if len(vintage_dates) <= MAX_VINTAGES_PER_REQUEST:
+        return [(realtime_start, REALTIME_END)]
+    starts = vintage_dates[::MAX_VINTAGES_PER_REQUEST]
+    starts[0] = realtime_start
+    windows = []
+    for i, start in enumerate(starts):
+        if i + 1 < len(starts):
+            end = (dt.date.fromisoformat(starts[i + 1]) - dt.timedelta(days=1)).isoformat()
+        else:
+            end = REALTIME_END
+        windows.append((start, end))
+    return windows
+
+
 def fetch_observations(api_key: str, code: str, realtime_start: str,
-                       observation_start: str | None) -> list[dict]:
-    """Descarga todas las observaciones (con vintages) paginando."""
+                       observation_start: str | None,
+                       realtime_end: str = REALTIME_END) -> list[dict]:
+    """Descarga todas las observaciones (con vintages) de una ventana, paginando."""
     out: list[dict] = []
     offset = 0
     while True:
         params = dict(
             series_id=code,
             realtime_start=realtime_start,
-            realtime_end=REALTIME_END,
+            realtime_end=realtime_end,
             output_type=1,          # una fila por observación y periodo de vigencia
             sort_order="asc",
             limit=FRED_PAGE,
@@ -177,11 +216,26 @@ def to_row(series_id: str, obs: dict) -> dict:
     }
 
 
-def dedupe(rows: list[dict]) -> list[dict]:
-    seen: dict[tuple, dict] = {}
+def compress(rows: list[dict]) -> list[dict]:
+    """Elimina duplicados y versiones que repiten el valor de la anterior.
+
+    Al partir el periodo en ventanas, FRED repite al inicio de cada ventana las
+    observaciones que seguían vigentes. Esas filas no son revisiones reales:
+    tienen el mismo valor que la versión previa, así que se descartan.
+    """
+    unique: dict[tuple, dict] = {}
     for row in rows:
-        seen[(row["series_id"], row["as_of"], row["vintage"])] = row
-    return list(seen.values())
+        unique[(row["series_id"], row["as_of"], row["vintage"])] = row
+    kept: list[dict] = []
+    previous: dict[tuple, dict] = {}
+    for row in sorted(unique.values(), key=lambda r: (r["as_of"], r["vintage"])):
+        key = (row["series_id"], row["as_of"])
+        last = previous.get(key)
+        if last is not None and last["value"] == row["value"]:
+            continue
+        kept.append(row)
+        previous[key] = row
+    return kept
 
 
 def check_metadata(api_key: str, series: dict) -> dict:
@@ -212,18 +266,14 @@ def ingest_series(db: Supabase, api_key: str, series: dict, backfill: bool) -> d
             if series["frequency"] == "daily" else None
         )
 
-    note = None
-    try:
-        raw = fetch_observations(api_key, code, realtime_start, observation_start)
-    except FredError as exc:
-        # Algunas series de terceros no admiten historial de vintages: se descarga
-        # solo la versión vigente y se deja constancia.
-        if not backfill:
-            raise
-        raw = fetch_observations(api_key, code, today.isoformat(), None)
-        note = f"sin vintages históricas ({exc}); solo versión vigente"
+    # Nunca se rellena con la versión vigente si falla la descarga de vintages:
+    # eso fecharía todo el historial como publicado hoy y falsearía el backtest.
+    windows = realtime_windows(fetch_vintage_dates(api_key, code, realtime_start), realtime_start)
+    raw: list[dict] = []
+    for start, end in windows:
+        raw.extend(fetch_observations(api_key, code, start, observation_start, end))
 
-    rows = dedupe([to_row(series["id"], o) for o in raw])
+    rows = compress([to_row(series["id"], o) for o in raw])
     for i in range(0, len(rows), UPSERT_CHUNK):
         db.insert("observations", rows[i:i + UPSERT_CHUNK],
                   on_conflict="series_id,as_of,vintage")
@@ -239,8 +289,8 @@ def ingest_series(db: Supabase, api_key: str, series: dict, backfill: bool) -> d
         "fred_units": attrs.get("fred_units"),
         "catalog_unit": series.get("unit"),
     }
-    if note:
-        result["note"] = note
+    if len(windows) > 1:
+        result["windows"] = len(windows)
     return result
 
 
