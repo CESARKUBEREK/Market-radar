@@ -379,11 +379,12 @@ def store(db, signals: list[dict], price_series: dict[str, str]) -> int:
     import json
     r = db.session.post(f"{db.base}/rule_versions", params={"on_conflict": "id"},
                         headers={"Prefer": "resolution=ignore-duplicates,return=minimal"},
-                        data=json.dumps({"id": VERSION, "scope": "exceptional_situations", "params": RULE_PARAMS,
+                        data=json.dumps({"id": VERSION, "scope": "threshold_alerts", "params": RULE_PARAMS,
                                          "frozen_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                                          "notes": "report/exceptional.py; se ejecuta con el informe diario."}),
                         timeout=60)
-    r.raise_for_status()
+    if not r.ok:
+        raise RuntimeError(f"rule_versions HTTP {r.status_code}: {r.text[:200]}")
     n = 0
     for s in signals:
         s = {**s, "series_id": s["series_id"] or price_series.get(s["instrumento"] or "")}

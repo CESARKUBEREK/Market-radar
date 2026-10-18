@@ -232,6 +232,10 @@ calendario). Formato condición → consecuencia, con horizonte y qué la invali
 
 LIMITACIONES: lo que la evidencia no permite confirmar.
 
+FUENTES: cada elemento de «fuentes» y «se_apoya_en» es un identificador EXACTO de la evidencia, tal cual \
+aparece como clave («M3», «T_gold», «X_m2», «S1», «C2»…). Nunca lo dejes vacío. Lo que no puedas apoyar en un \
+identificador, no lo escribas.
+
 Nada de recomendaciones de compra o venta. Máximo 8 hechos, 5 interpretaciones y 4 hipótesis.
 
 Estilo: frases cortas; números en formato español (coma decimal, punto de miles), 2 decimales como máximo. \
@@ -310,7 +314,17 @@ def validate(result: dict, known: set[str], evidence: dict | None = None) -> tup
     evidence = evidence or {}
 
     def ok_refs(refs: list[str]) -> list[str]:
-        return [r for r in refs if r in known]
+        """Acepta identificadores exactos o rodeados de texto («[M3]», «M3 (S&P 500)»)."""
+        out = []
+        for r in refs or []:
+            r = str(r).strip()
+            if r in known:
+                out.append(r)
+                continue
+            for tok in re.findall(r"[A-Z](?:_[A-Za-z0-9_áéíóúñ\-]+|\d+)", r):
+                if tok in known:
+                    out.append(tok)
+        return list(dict.fromkeys(out))
 
     # Panorama: una entrada por instrumento obligatorio, con su T_ y la tendencia calculada por código
     panorama, seen = [], set()
@@ -354,7 +368,7 @@ def validate(result: dict, known: set[str], evidence: dict | None = None) -> tup
         if refs:
             hechos.append({**h, "fuentes": refs})
         else:
-            dropped.append(f"hecho sin fuente: {h.get('texto', '')[:80]}")
+            dropped.append(f"hecho sin fuente: {h.get('texto', '')[:60]} (citaba {h.get('fuentes')})")
     interp = []
     for it in result.get("interpretaciones", []):
         refs = ok_refs(it.get("se_apoya_en", []))

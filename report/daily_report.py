@@ -419,7 +419,11 @@ def main() -> int:
     try:
         rates = {s["instrument_id"] for s in data["summary"] if s["is_rate"]}
         data["signals"], data["cot_overview"] = exceptional.detect(db, data["closes"], rates)
-        saved = exceptional.store(db, data["signals"], {s["instrument_id"]: s["series_id"] for s in data["summary"]})
+        try:
+            saved = exceptional.store(db, data["signals"], {s["instrument_id"]: s["series_id"] for s in data["summary"]})
+        except Exception as exc:
+            saved = 0
+            print(f"::warning::No se pudieron guardar las señales en alertas: {str(exc)[:300]}")
         print(f"::notice::Situaciones excepcionales: {len(data['signals'])} señales "
               f"({saved} nuevas en alertas): " + " | ".join(x["titulo"] for x in data["signals"])[:3000])
     except Exception as exc:
