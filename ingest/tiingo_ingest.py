@@ -93,6 +93,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     api_key = require_env("TIINGO_API_KEY")
+    if api_key.lower().startswith("token "):   # tolera que se pegue con el prefijo "Token "
+        api_key = api_key[6:].strip()
+    if len(api_key) != 40 or any(c not in "0123456789abcdef" for c in api_key.lower()):
+        print(f"::warning::TIINGO_API_KEY tiene {len(api_key)} caracteres; un token de Tiingo "
+              "suele tener 40 caracteres hexadecimales.")
     db = Supabase.from_env()
     mode = "backfill" if args.backfill else "incremental"
     return run_catalog(db, SOURCE_ID, mode, db.catalog(SOURCE_ID, args.series),
