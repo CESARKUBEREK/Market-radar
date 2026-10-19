@@ -377,7 +377,9 @@ def flow_directions(overview: list[dict], extras: dict | None) -> tuple[list[str
             (to if v["12m"] > 0 else out).append((-2, text))
     to.sort(key=lambda x: -x[0])      # primero el COT (por intensidad), después ETF y oro oficial
     out.sort(key=lambda x: -x[0])
-    return [t for _, t in to[:6]], [t for _, t in out[:6]]
+    cot_to = [x for x in to if x[0] >= 0][:5] + [x for x in to if x[0] < 0]
+    cot_out = [x for x in out if x[0] >= 0][:5] + [x for x in out if x[0] < 0]
+    return [t for _, t in cot_to], [t for _, t in cot_out]
 
 
 def compose_positioning(overview: list[dict], extras: dict | None) -> str:
