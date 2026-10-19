@@ -137,9 +137,11 @@ def cot_signals(cot: dict, closes: dict, overview: list | None = None) -> list[d
             overview.append({"instrumento": inst, "categoria": who, **metr})
         if p >= 95 or p <= 5:
             side = "larga" if last > 0 else "corta"
-            extreme = "máximo" if p >= 95 else "mínimo"
+            extreme = ("máximo" if p == 100 else "mínimo" if p == 0 else
+                       "zona alta" if p >= 95 else "zona baja")
+            lean = ("más larga" if p >= 95 else "más corta") + " de lo habitual"
             out.append(sig("A", inst, f"{name}: posicionamiento de {who} en percentil {p} ({extreme} de {years:g} años)",
-                           f"Posición neta {side} de {fmt(abs(last))} contratos al {last_d}, percentil {p} de los últimos "
+                           f"Posición neta {side} de {fmt(abs(last))} contratos al {last_d} ({lean}), percentil {p} de los últimos "
                            f"{years:g} años. No anticipa la dirección del precio: indica una exposición poco habitual que "
                            "puede aumentar la sensibilidad a noticias y movimientos de precio.",
                            "dato publicado", "alta" if p >= 98 or p <= 2 else "atención", src, last_d, metr,
