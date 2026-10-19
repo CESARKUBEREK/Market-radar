@@ -711,6 +711,13 @@ def main() -> int:
         return 0
 
     db = Supabase.from_env()
+    if not args.force and not args.dry_run:
+        # La ejecución programada no reenvía si ese día ya se envió uno (p. ej. lanzado a mano).
+        done = db.select("daily_reports", {"select": "sent_at", "report_date": f"eq.{report_date.isoformat()}",
+                                           "status": "eq.sent"})
+        if done:
+            print(f"::notice::El informe del {report_date} ya se envió ({done[0]['sent_at']}); no se reenvía.")
+            return 0
     data = load(db, report_date)
     data["closes"] = market_context.load_closes(db)
     data["macro"] = market_context.load_macro(db)
