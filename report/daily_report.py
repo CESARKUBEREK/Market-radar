@@ -358,7 +358,7 @@ def compose_positioning(overview: list[dict], extras: dict | None) -> str:
                              "—" if pchg is None else ("+" if pchg > 0 else "") + num(pchg, 0 if unit == " pb" else 1) + unit])
         return rows
 
-    head = ["Mercado", "Neta (contratos)", "Pct. 5 años", "4 semanas", "13 semanas", "Precio 13 sem."]
+    head = ["Mercado", "Neta (contratos)", "Pct. 5 años", "4 semanas", "13 semanas", "Precio 13 sem.*"]
     inst_rows = rows_for(["am"])
     spec_rows = rows_for(["mm", "lf"])
     body = (f'<p style="font-size:13px;margin:4px 0 6px">COT de la CFTC, posiciones del {date[8:10]}/{date[5:7]} '
@@ -391,7 +391,8 @@ def compose_positioning(overview: list[dict], extras: dict | None) -> str:
     body += (f'<p style="font-size:11px;color:{GREY};margin:8px 0 0">Percentil de la posición neta en 5 años: rojo '
              "≥ 95 o ≤ 5, ámbar ≥ 90 o ≤ 10. En bonos, índices y bitcoin de CME, gestoras largas y fondos apalancados "
              "cortos son en parte la misma operación de base (contado contra futuro), no apuestas opuestas. Las categorías "
-             "del COT no identifican «manos fuertes»: describen tipos de participante. Posicionamiento no es dirección.</p>")
+             "del COT no identifican «manos fuertes»: describen tipos de participante. Posicionamiento no es dirección. "
+             "* En bonos, variación del rendimiento (sube el rendimiento = baja el precio del bono).</p>")
     return section("Posicionamiento por grupos", body)
 
 
