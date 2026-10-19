@@ -201,6 +201,9 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str,
                                         f"disponible hoy ({esc(analysis_error[:120])}).</p>"))
     if exc_html:
         body.append(exc_html)
+    pos_html = compose_positioning(data.get("cot_overview") or [], data.get("positioning_extras"))
+    if pos_html:
+        body.append(pos_html)
     hyp_html = compose_hypotheses(data.get("hyp_tracking"))
     if hyp_html:
         body.append(hyp_html)
@@ -299,6 +302,97 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str,
     if data.get("hyp_tracking"):
         content["seguimiento_hipotesis"] = {k: data["hyp_tracking"][k] for k in ("recuento", "tasa_acierto", "decididas")}
     return title, html_doc, content
+
+
+COT_NAMES = {"gold": "Oro", "silver": "Plata", "copper": "Cobre", "wti": "Petróleo WTI", "spx": "S&P 500",
+             "ndx": "Nasdaq-100", "rut": "Russell 2000", "us10y": "Bono a 10 años", "us02y": "Bono a 2 años",
+             "eurusd": "Euro", "dxy": "Dólar (DXY)", "btc": "Bitcoin (CME)"}
+COT_ORDER = list(COT_NAMES)
+
+
+def load_positioning_extras(db) -> dict:
+    """Flujos de ETF (20 sesiones y 3 meses) y variación de reservas de oro oficiales (3 y 12 meses)."""
+    out = {"etf": {}, "oro_oficial": {}}
+    for t in ("spy", "gld", "ibit"):
+        rows = db.select("observations", {"select": "as_of,value", "series_id": f"eq.etf_{t}_flow_usd",
+                                          "order": "as_of.desc", "limit": "70"})
+        if rows:
+            vals = [float(r["value"]) for r in rows if r["value"] is not None]
+            out["etf"][t.upper()] = {"fecha": rows[0]["as_of"], "20": sum(vals[:20]) if len(vals) >= 20 else None,
+                                     "63": sum(vals[:63]) if len(vals) >= 63 else None}
+    for c in ("CHN", "RUS", "IND", "USA", "DEU", "JPN"):
+        rows = db.select("observations", {"select": "as_of,value", "series_id": f"eq.wgc_gold_tonnes_{c}",
+                                          "order": "as_of.desc", "limit": "13"})
+        if len(rows) >= 13:
+            v = [float(r["value"]) for r in rows]
+            out["oro_oficial"][c] = {"fecha": rows[0]["as_of"], "3m": v[0] - v[3], "12m": v[0] - v[12]}
+    return out
+
+
+def compose_positioning(overview: list[dict], extras: dict | None) -> str:
+    if not overview:
+        return ""
+    by = {(o["instrumento"], o["grupo"]): o for o in overview}
+    date = max(o["fecha_posiciones"] for o in overview)
+
+    def pct_cell(p):
+        color = RED if p is not None and (p >= 95 or p <= 5) else ("#9a6700" if p is not None and (p >= 90 or p <= 10) else INK)
+        return f'<span style="color:{color};font-weight:{600 if color != INK else 400}">{p}</span>'
+
+    def signed_int(x):
+        return "—" if x is None else ("+" if x > 0 else "") + num(x, 0)
+
+    def rows_for(groups):
+        rows = []
+        for inst in COT_ORDER:
+            for g in groups:
+                o = by.get((inst, g))
+                if not o:
+                    continue
+                pchg = o.get("precio_cambio_13_semanas")
+                unit = " pb" if inst in ("us10y", "us02y") else " %"
+                rows.append([esc(COT_NAMES[inst]) + (f' <span style="color:{GREY};font-size:11px">({esc(o["categoria"])})</span>'
+                                                     if len(groups) > 1 else ""),
+                             signed_int(o["neta_contratos"]), pct_cell(o["percentil_5_años"]),
+                             chg_abs(o.get("cambio_4_semanas")), chg_abs(o.get("cambio_13_semanas")),
+                             "—" if pchg is None else ("+" if pchg > 0 else "") + num(pchg, 0 if unit == " pb" else 1) + unit])
+        return rows
+
+    head = ["Mercado", "Neta (contratos)", "Pct. 5 años", "4 semanas", "13 semanas", "Precio 13 sem."]
+    inst_rows = rows_for(["am"])
+    spec_rows = rows_for(["mm", "lf"])
+    body = (f'<p style="font-size:13px;margin:4px 0 6px">COT de la CFTC, posiciones del {date[8:10]}/{date[5:7]} '
+            "(publicadas el viernes siguiente).</p>")
+    if inst_rows:
+        body += ('<p style="margin:10px 0 4px;font-weight:600;font-size:14px">Dinero institucional: gestoras</p>'
+                 + table(head, inst_rows))
+    if spec_rows:
+        body += ('<p style="margin:12px 0 4px;font-weight:600;font-size:14px">Especulativo: fondos gestionados '
+                 "(materias primas) y fondos apalancados (financieros)</p>" + table(head, spec_rows))
+    if extras:
+        etf = extras.get("etf") or {}
+        gold = extras.get("oro_oficial") or {}
+        lines = []
+        if etf:
+            parts = []
+            for t, v in etf.items():
+                if v.get("20") is not None:
+                    parts.append(f"{t} {signed_int(v['20'] / 1e6)} M$ en 20 sesiones"
+                                 + (f" ({signed_int(v['63'] / 1e6)} M$ en 3 meses)" if v.get("63") is not None else ""))
+            if parts:
+                lines.append("Flujos netos de ETF (emisor): " + "; ".join(parts) + ".")
+        if gold:
+            names = {"CHN": "China", "RUS": "Rusia", "IND": "India", "USA": "EE. UU.", "DEU": "Alemania", "JPN": "Japón"}
+            moved = [f"{names[c]} {signed_int(v['12m'])} t en 12 meses" for c, v in gold.items() if abs(v["12m"]) >= 1]
+            still = [names[c] for c, v in gold.items() if abs(v["12m"]) < 1]
+            lines.append("Reservas de oro de bancos centrales (FMI): " + ("; ".join(moved) if moved else "sin cambios")
+                         + (f"; sin cambios: {', '.join(still)}" if still else "") + ".")
+        body += "".join(f'<p style="font-size:13px;margin:8px 0 0">{esc(l)}</p>' for l in lines)
+    body += (f'<p style="font-size:11px;color:{GREY};margin:8px 0 0">Percentil de la posición neta en 5 años: rojo '
+             "≥ 95 o ≤ 5, ámbar ≥ 90 o ≤ 10. En bonos, índices y bitcoin de CME, gestoras largas y fondos apalancados "
+             "cortos son en parte la misma operación de base (contado contra futuro), no apuestas opuestas. Las categorías "
+             "del COT no identifican «manos fuertes»: describen tipos de participante. Posicionamiento no es dirección.</p>")
+    return section("Posicionamiento por grupos", body)
 
 
 HYP_STATE = {"acierto": ("Acierto", GREEN), "fallo": ("Fallo", RED), "no activada": ("No activada", GREY),
@@ -459,6 +553,11 @@ def main() -> int:
     data = load(db, report_date)
     data["closes"] = market_context.load_closes(db)
     data["macro"] = market_context.load_macro(db)
+    try:
+        data["positioning_extras"] = load_positioning_extras(db)
+    except Exception as exc:
+        data["positioning_extras"] = None
+        print(f"::warning::Flujos y reservas para posicionamiento: {str(exc)[:200]}")
     try:
         data["hyp_tracking"] = hypotheses.track(db, data["closes"], report_date)
         t = data["hyp_tracking"]

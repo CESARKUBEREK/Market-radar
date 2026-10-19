@@ -134,7 +134,15 @@ def cot_signals(cot: dict, closes: dict, overview: list | None = None) -> list[d
                 "fecha_posiciones": last_d, "publicado": "viernes siguiente"}
         src = [f"CFTC COT ({'desagregado' if grp == 'mm' else 'TFF'})"]
         if overview is not None:
-            overview.append({"instrumento": inst, "categoria": who, **metr})
+            p13 = None
+            if price and len(net) > 13:
+                a, b = value_at(price, net[-14][0]), value_at(price, last_d)
+                if a and b:
+                    p13 = round((b - a) * 100) if inst in ("us10y", "us02y") else round((b / a - 1) * 100, 1)
+            overview.append({"instrumento": inst, "grupo": grp, "categoria": who, **metr,
+                             "cambio_4_semanas": round(last - net[-5][1]) if len(net) > 4 else None,
+                             "cambio_13_semanas": round(last - net[-14][1]) if len(net) > 13 else None,
+                             "precio_cambio_13_semanas": p13})
         if p >= 95 or p <= 5:
             side = "larga" if last > 0 else "corta"
             extreme = ("máximo" if p == 100 else "mínimo" if p == 0 else
