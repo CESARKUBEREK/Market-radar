@@ -36,6 +36,7 @@ from common import Supabase, env_flag, now_utc, require_env  # noqa: E402
 
 import ai_analysis  # noqa: E402
 import exceptional  # noqa: E402
+import layout  # noqa: E402
 import hypotheses  # noqa: E402
 import market_context  # noqa: E402
 
@@ -92,11 +93,14 @@ def esc(s) -> str:
 
 
 def section(title: str, body: str) -> str:
-    return (f'<h2 style="font-size:16px;margin:28px 0 8px;color:{INK};'
-            f'border-bottom:1px solid #d0d7de;padding-bottom:4px">{esc(title)}</h2>{body}')
+    return (f'<h2 style="font-size:16px;margin:22px 0 8px;color:{INK};font-weight:700">{esc(title)}</h2>{body}')
 
 
 def table(headers: list[str], rows: list[list[str]], align_right_from: int = 1) -> str:
+    return layout.table(headers, rows, align_right_from=align_right_from, size=12)
+
+
+def _old_table(headers: list[str], rows: list[list[str]], align_right_from: int = 1) -> str:
     th = "".join(
         f'<th style="text-align:{"right" if i >= align_right_from else "left"};padding:4px 8px;'
         f'font-weight:600;color:{GREY};font-size:12px;border-bottom:1px solid #d0d7de">{h}</th>'
@@ -164,137 +168,225 @@ def load(db: Supabase, report_date: dt.date) -> dict:
 # --------------------------------------------------------------------------- #
 def compose(data: dict, report_date: dt.date, dashboard_url: str,
             analysis: dict | None = None, analysis_error: str | None = None) -> tuple[str, str, dict]:
+    """Informe en tres niveles: «En 30 segundos», lectura del día y anexo de detalle."""
+    L = layout
     summary = data["summary"]
+    by_id = {s["instrument_id"]: s for s in summary}
     stale = sorted(s["instrument"] for s in summary if (s.get("days_since_last") or 0) > STALE_DAYS)
     latest_by_source: dict[str, dict] = {}
-    for l in data["sync"]:  # ordenados de más reciente a más antiguo
-        latest_by_source.setdefault(l["source_id"], l)
-    failed = sorted(s for s, l in latest_by_source.items() if l["status"] in ("failed", "partial"))
+    for lg in data["sync"]:  # ordenados de más reciente a más antiguo
+        latest_by_source.setdefault(lg["source_id"], lg)
+    failed = sorted(s for s, lg in latest_by_source.items() if lg["status"] in ("failed", "partial"))
+    res = (analysis or {}).get("result") or {}
+    src = (analysis or {}).get("sources") or {}
 
-    # Resumen: los tres mayores movimientos del último día, medidos frente a su volatilidad
     def z(s):
         vol = s.get("vol_20") or 0
         daily = (float(vol) / (100 if not s["is_rate"] else 1)) / (252 ** 0.5) if vol else 0
         c = float(s.get("chg_1d") or 0) / (100 if not s["is_rate"] else 1)
         return abs(c / daily) if daily else 0
     movers = sorted((s for s in summary if s.get("chg_1d") is not None), key=z, reverse=True)[:3]
-    recent_alerts = [a for a in data["alerts"]]
+    recent_alerts = list(data["alerts"])
 
-    lines = []
-    if movers:
-        parts = [f"{esc(m['instrument'])} {chg(m['chg_1d'], m['is_rate'])}" for m in movers]
-        lines.append("Mayores movimientos de la última sesión, en relación con su volatilidad: " + ", ".join(parts) + ".")
-    lines.append(f"{len(recent_alerts)} alertas en los últimos 4 días." if recent_alerts
-                 else "Sin alertas en los últimos 4 días.")
+    def refs(r):
+        return ai_analysis._refs_html(r, src) if src else ""
+
+    # Cabecera
+    dates = sorted((s["last_date"] for s in summary if s["instrument_id"] != "btc"), reverse=True)
+    ref_date = max(set(dates), key=dates.count) if dates else None
+    status = L.para(f"Datos al cierre del {fmt_day(ref_date + 'T12:00:00+00:00')}" if ref_date else "",
+                    size=13, color=L.GREY, margin="0")
+    warn = []
     if stale:
-        lines.append(f'<span style="color:{RED}">Datos atrasados: {esc(", ".join(stale))}.</span>')
+        warn.append(f"datos atrasados: {esc(', '.join(stale))}")
     if failed:
-        lines.append(f'<span style="color:{RED}">Fuentes con errores en la última descarga: {esc(", ".join(failed))}.</span>')
-    body = [section("Resumen", "".join(f'<p style="margin:4px 0;font-size:14px">{l}</p>' for l in lines))]
+        warn.append(f"fuentes con errores: {esc(', '.join(failed))}")
+    if warn:
+        status += L.para("⚠ " + "; ".join(warn) + ".", size=13, color=L.RED, margin="6px 0 0")
 
-    # Análisis con IA primero (lo esencial), después las situaciones excepcionales con su lectura
-    exc_html = compose_exceptional(data.get("signals") or [], ai_analysis.signal_readings(analysis))
-    if analysis:
-        body.append(section("Análisis", ai_analysis.render(analysis)))
-    elif analysis_error:
-        body.append(section("Análisis", f'<p style="font-size:13px;color:{GREY}">El análisis con IA no está '
-                                        f"disponible hoy ({esc(analysis_error[:120])}).</p>"))
-    if exc_html:
-        body.append(exc_html)
-    pos_html = compose_positioning(data.get("cot_overview") or [], data.get("positioning_extras"))
-    if pos_html:
-        body.append(pos_html)
-    hyp_html = compose_hypotheses(data.get("hyp_tracking"))
-    if hyp_html:
-        body.append(hyp_html)
+    body = []
 
-    # Alertas
+    # 1. En 30 segundos
+    inner = ""
+    if res.get("titular"):
+        inner += f'<p style="margin:0 0 10px;font-size:18px;font-weight:700;line-height:1.4">{esc(res["titular"])}</p>'
+    if res.get("puntos"):
+        inner += L.bullets([esc(p["texto"]) for p in res["puntos"]])
+    if not inner and movers:
+        inner = L.para("Mayores movimientos de la sesión, en relación con su volatilidad: "
+                       + ", ".join(f"{esc(m['instrument'])} {chg(m['chg_1d'], m['is_rate'])}" for m in movers) + ".")
+    if analysis_error and not analysis:
+        inner += L.para(f"El análisis con IA no está disponible hoy ({esc(analysis_error[:100])}).", 13, L.GREY)
+    key = []
+    for iid in ("spx", "ndx", "us10y", "dxy", "gold", "brent", "btc", "eurusd", "move"):
+        s = by_id.get(iid)
+        if not s:
+            continue
+        val = (num(s["last_value"], 2) + " %") if s["is_rate"] else price(s["last_value"])
+        delta = L.signed(float(s["chg_1d"]) * 100, 0, " pb") if s["is_rate"] and s.get("chg_1d") is not None \
+            else L.signed(s.get("chg_1d"), 2, " %")
+        key.append((s["instrument"], val, delta + f' <span style="color:{L.GREY};font-size:11px">'
+                    f'{s["last_date"][8:10]}/{s["last_date"][5:7]}</span>'))
+    body.append(L.block("En 30 segundos", L.BLUE, (L.card(inner) if inner else "") + L.chips(key[:6])))
+
+    # 2. Próximos días: a vigilar + agenda
+    upcoming = []
+    for v in res.get("a_vigilar", []):
+        upcoming.append(f"<b>{esc(v['texto'])}</b>")
+    end = (report_date + dt.timedelta(days=AGENDA_DAYS)).isoformat()
+    for e in (data.get("events") or []):
+        if e["event_at"][:10] < end and e["kind"] != "holiday":
+            upcoming.append(f'{esc(fmt_day(e["event_at"], True))} · {esc(e.get("notes") or "")}')
+    holidays = [e for e in (data.get("events") or []) if e["kind"] == "holiday" and e["event_at"][:10] < end]
+    if holidays:
+        upcoming.append(L.small("Festivos: " + "; ".join(f'{fmt_day(e["event_at"])} {e.get("notes", "").replace("Festivo: ", "")}'
+                                                            for e in holidays)))
+    if upcoming:
+        body.append(L.block("Próximos días", L.AMBER, L.bullets(upcoming[:10], 14), note="hora de París"))
+
+    # 3. Lectura del día (IA)
+    if res:
+        inner = ""
+        if res.get("hechos"):
+            inner += L.sub("Qué ha pasado") + L.bullets([esc(h["texto"]) + refs(h["fuentes"]) for h in res["hechos"]])
+        conf = {"alta": L.GREEN, "media": L.AMBER, "baja": L.GREY}
+        if res.get("interpretaciones"):
+            inner += L.sub("Por qué podría importar", L.BLUE) + L.bullets([
+                esc(i["texto"]) + f' <span style="font-size:11px;font-weight:700;color:{conf.get(i["confianza"], L.GREY)}">'
+                f'confianza {esc(i["confianza"])}</span>' + refs(i["se_apoya_en"]) for i in res["interpretaciones"]])
+        if res.get("hipotesis"):
+            inner += L.sub("Hipótesis", L.PURPLE) + L.bullets([
+                f'<b>Si</b> {esc(ai_analysis._no_si(h["si"]))} <b>→</b> {esc(h["entonces"])}<br>'
+                + L.small(f'{esc(h["horizonte"])} · se invalida si {esc(ai_analysis._no_si(h["invalidacion"]))}')
+                for h in res["hipotesis"]])
+        body.append(L.block("Lectura del día", L.INK, inner, note=f"IA ({esc(analysis['model'])}), verificada con los datos"))
+
+    # 4. Señales: situaciones excepcionales + hacia dónde va el dinero + alertas
+    sig_items = []
+    readings = ai_analysis.signal_readings(analysis)
+    for i, sg in enumerate((data.get("signals") or [])[:8]):
+        color = L.RED if sg["severidad"] == "alta" else L.AMBER
+        sig_items.append(f'<span style="color:{color}">●</span> <b>{esc(sg["titulo"])}</b><br>'
+                         f'{esc(readings.get(i) or sg["detalle"])}<br>'
+                         + L.small(f'{esc(EXC_TYPES.get(sg["tipo"], sg["tipo"]))} · {esc(sg["naturaleza"])} · '
+                                   f'{esc(", ".join(sg["fuentes"]))}, dato del {sg["fecha_dato"][8:10]}/{sg["fecha_dato"][5:7]}'))
+    to, out = flow_directions(data.get("cot_overview") or [], data.get("positioning_extras"))
+    inner = ""
+    if sig_items:
+        inner += L.sub("Situaciones excepcionales") + L.bullets(sig_items, 14) + L.small(
+            "Reglas fijas descriptivas, sin validación estadística; no es el radar de la Vía B.")
+    if to or out:
+        cot_date = max((o["fecha_posiciones"] for o in data.get("cot_overview") or []), default="")
+        inner += L.sub("Hacia dónde va el dinero", L.GREEN) + L.bullets([esc(t) for t in to] or
+                                                                         [L.small("Sin movimientos claros.")], 14)
+        inner += L.sub("De dónde sale", L.RED) + L.bullets([esc(t) for t in out] or [L.small("Sin movimientos claros.")], 14)
+        inner += L.small(f"COT del {cot_date[8:10]}/{cot_date[5:7]}, flujos de ETF y reservas del FMI. "
+                         "Detalle por grupos en el anexo.")
     if recent_alerts:
-        rows = [[esc(a["as_of"]), esc(RULE_LABELS.get(a["rule_id"], a["rule_id"])), esc(a["title"])]
-                for a in recent_alerts]
-        body.append(section("Alertas", table(["Fecha", "Tipo", "Detalle"], rows, align_right_from=99)))
+        inner += L.sub("Alertas de los últimos 4 días") + L.bullets(
+            [f'{esc(a["as_of"][8:10])}/{esc(a["as_of"][5:7])} · {esc(RULE_LABELS.get(a["rule_id"], a["rule_id"]))}: '
+             f'{esc(a["title"])}' for a in recent_alerts[:8]], 14)
+    if inner:
+        body.append(L.block("Señales", L.RED, inner))
 
-    # Agenda de la semana y noticias oficiales relevantes
-    agenda = compose_agenda(data.get("events") or [], report_date)
-    if agenda:
-        body.append(agenda)
-    if data.get("news"):
-        rows = [[esc(fmt_day(n["published_at"])), esc(n["source_name"]),
-                 f'<a href="{esc(n["url"])}" style="color:{INK}">{esc(n["title"])}</a>']
-                for n in data["news"]]
-        body.append(section("Noticias oficiales relevantes", table(["Fecha", "Fuente", "Titular"], rows,
-                                                                    align_right_from=99)))
-
-    # Mercados por categoría
+    # 5. Mercados: una tabla con todo, agrupada por categoría, con tendencia
+    pano = {p["instrument_id"]: p["lectura"] for p in res.get("panorama", [])}
+    rows, groups = [], {}
     for cat, label in CATEGORIES:
         items = sorted((s for s in summary if s["category"] == cat), key=lambda s: s["instrument"])
         if not items:
             continue
-        rows = [[esc(s["instrument"]) + (' <span style="color:%s">(atrasado)</span>' % RED
-                                         if (s.get("days_since_last") or 0) > STALE_DAYS else ""),
-                 (num(s["last_value"], 2) + " %") if s["is_rate"] else price(s["last_value"]),
-                 chg(s.get("chg_1d"), s["is_rate"]), chg(s.get("chg_1w"), s["is_rate"]),
-                 chg(s.get("chg_1m"), s["is_rate"]), chg(s.get("chg_ytd"), s["is_rate"]),
-                 num(s.get("vol_20"), 1) + (" pp" if s["is_rate"] else " %"),
-                 esc(s["last_date"][5:])]
-                for s in items]
-        body.append(section(label, table(
-            ["Instrumento", "Último", "1 día", "1 semana", "1 mes", "Año", "Vol. 20d", "Fecha"], rows)))
+        groups[len(rows)] = label
+        for s in items:
+            t = src.get(f"T_{s['instrument_id']}", {})
+            r = s["is_rate"]
+            name = f'<b>{esc(s["instrument"])}</b>'
+            badge = L.trend_badge(t.get("tendencia_calculada"), t.get("percentil_del_nivel_desde_2020"))
+            if badge:
+                name += "<br>" + badge
+            if pano.get(s["instrument_id"]):
+                name += f'<br><span style="font-size:12px;color:{L.GREY};white-space:normal">{esc(pano[s["instrument_id"]])}</span>'
+            if (s.get("days_since_last") or 0) > STALE_DAYS:
+                name += f' <span style="font-size:11px;color:{L.RED}">atrasado</span>'
 
-    # Liquidez y política monetaria
-    liq_rows = []
+            def ch(x):
+                return (L.signed(float(x) * 100, 0, " pb") if x is not None else L.signed(None)) if r \
+                    else L.signed(x, 1, " %")
+            rows.append([name, (num(s["last_value"], 2) + " %") if r else price(s["last_value"]),
+                         ch(s.get("chg_1d")), ch(s.get("chg_1m")), ch(s.get("chg_ytd"))])
+    if rows:
+        body.append(L.block("Mercados", L.GREEN, L.table(["Activo", "Último", "Día", "Mes", "Año"], rows,
+                                                        group_rows=groups, size=13),
+                            note="tendencia por regla fija · pct. = percentil del nivel desde 2020"))
+
+    # 6. Noticias
+    if data.get("news"):
+        body.append(L.block("Noticias oficiales", L.GREY, L.bullets([
+            f'<a href="{esc(n["url"])}" style="color:{L.INK}">{esc(n["title"])}</a> '
+            + L.small(f'{esc(n["source_name"])} · {esc(fmt_day(n["published_at"]))}') for n in data["news"][:5]], 14)))
+
+    # 7. Anexo: detalle para consultar
+    annex = []
+    hyp_html = compose_hypotheses(data.get("hyp_tracking"))
+    if hyp_html:
+        annex.append(hyp_html)
+    pos_html = compose_positioning(data.get("cot_overview") or [], data.get("positioning_extras"), directions=False)
+    if pos_html:
+        annex.append(pos_html)
+    liq = []
     if data["liquidity"]:
-        l = data["liquidity"][0]
-        liq_rows.append(["Liquidez neta de la Fed (mm USD)", num(l["net_liquidity_b"], 0),
-                         chg_abs(l.get("chg_4w_b")), chg_abs(l.get("chg_13w_b")), esc(l["as_of"])])
-        liq_rows.append(["  Balance de la Fed", num(l["fed_balance_b"], 0), "", "", ""])
-        liq_rows.append(["  Cuenta del Tesoro (TGA)", num(l["tga_b"], 0), "", "", ""])
-        liq_rows.append(["  Repos inversos", num(l["rrp_b"], 0), "", "", ""])
+        lq = data["liquidity"][0]
+        liq.append(f"<b>Liquidez neta de la Fed</b>: {num(lq['net_liquidity_b'], 0)} mm $ "
+                   f"({chg_abs(lq.get('chg_4w_b'))} en 4 semanas, {chg_abs(lq.get('chg_13w_b'))} en 13) · {lq['as_of'][8:10]}/{lq['as_of'][5:7]}")
     if data["m2"]:
         m = data["m2"][0]
-        liq_rows.append(["M2 (mm USD)", num(m["m2_b"], 0), f"{num(m['chg_mom_pct'])} % mes",
-                         f"{num(m['chg_yoy_pct'])} % año", esc(m["as_of"][:7])])
+        liq.append(f"<b>M2</b>: {num(m['m2_b'], 0)} mm $, {num(m['chg_yoy_pct'], 1)} % interanual · {m['as_of'][5:7]}/{m['as_of'][:4]}")
     if data["fedfunds"]:
         f = data["fedfunds"]
-        delta = (float(f[0]["value"]) - float(f[1]["value"])) if len(f) > 1 else None
-        liq_rows.append(["Fondos federales (%)", num(f[0]["value"]), chg(delta, True) if delta is not None else "—",
-                         "", esc(f[0]["as_of"][:7])])
+        liq.append(f"<b>Fondos federales</b>: {num(f[0]['value'])} % · {f[0]['as_of'][5:7]}/{f[0]['as_of'][:4]}")
     if data["nfci"]:
         n = data["nfci"][0]
-        liq_rows.append(["Condiciones financieras (NFCI)", num(n["value"]), "", "", esc(n["as_of"])])
-    if liq_rows:
-        body.append(section("Liquidez y política monetaria (EE. UU.)", table(
-            ["Indicador", "Nivel", "Cambio", "Cambio largo", "Dato de"], liq_rows)))
-
-    # FMI: solo cuando hay datos publicados en los últimos días (el oro es mensual; la deuda, semestral).
-    imf_section = compose_imf(data.get("imf") or [], report_date)
-    if imf_section:
-        body.append(imf_section)
-
-    # Correlaciones: se destacan las que están en el extremo de su rango anual
+        liq.append(f"<b>Condiciones financieras (NFCI)</b>: {num(n['value'], 3)} (negativo = más laxas que la media)")
+    if liq:
+        annex.append(section("Liquidez y política monetaria (EE. UU.)", L.bullets(liq, 14)))
     corr_rows = []
     for c in data["correlations"]:
         cur, lo, hi = (float(c[k]) if c.get(k) is not None else None for k in ("corr_60", "min_1y", "max_1y"))
         flag = ""
         if cur is not None and lo is not None and hi is not None and hi > lo:
             pos = (cur - lo) / (hi - lo)
-            flag = "mínimo del año" if pos <= 0.05 else "máximo del año" if pos >= 0.95 else ""
-        corr_rows.append([esc(c["label"]), num(cur), num(c.get("corr_3m_ago")),
-                          f"{num(lo)} a {num(hi)}", f'<span style="color:{RED}">{flag}</span>' if flag else ""])
+            flag = "mín. año" if pos <= 0.05 else "máx. año" if pos >= 0.95 else ""
+        corr_rows.append([esc(c["label"]) + (f'<br><span style="color:{L.RED};font-weight:700;font-size:11px">{flag}</span>'
+                                             if flag else ""),
+                          num(cur), num(c.get("corr_3m_ago")), f"{num(lo)} a {num(hi)}", flag])
     if corr_rows:
-        body.append(section("Correlaciones (60 sesiones)", table(
-            ["Par", "Actual", "Hace 3 meses", "Rango 1 año", ""], corr_rows)))
+        corr_rows.sort(key=lambda r: r[4] == "")
+        annex.append(section("Correlaciones de 60 sesiones", L.table(
+            ["Par", "Actual", "Hace 3 m", "Rango 1 año"], [r[:4] for r in corr_rows], size=13)))
+    imf_section = compose_imf(data.get("imf") or [], report_date)
+    if imf_section:
+        annex.append(imf_section)
+    lim = []
+    lag = (src.get("X_fechas_de_cierre", {}).get("datos") or {}).get("activos_con_cierre_anterior") or {}
+    if lag:
+        by_date: dict[str, list[str]] = {}
+        for k, v in lag.items():
+            by_date.setdefault(v, []).append(k)
+        lim.append("Cierres de días anteriores: " + "; ".join(
+            f"{', '.join(v)} ({d[8:10]}/{d[5:7]})" for d, v in sorted(by_date.items())) + ".")
+    lim += [esc(x) for x in res.get("limitaciones", [])]
+    if lim:
+        annex.append(section("Limitaciones de hoy", L.bullets(lim, 13)))
+    if annex:
+        body.append(L.block("Anexo", L.GREY, "".join(annex), note="detalle para consultar"))
 
-    footer = (f'<p style="font-size:12px;color:{GREY};margin-top:28px">Datos al cierre más reciente de cada '
-              f"fuente. Variaciones en %, salvo tipos (pp, puntos porcentuales). Volatilidad anualizada. "
-              f"Cobre, MOVE, DXY, divisas, Rheinmetall, MERVAL y TA-35 proceden de Yahoo, fuente no oficial."
-              + (f' <a href="{esc(dashboard_url)}">Abrir el dashboard</a>.' if dashboard_url else "") + "</p>")
+    footer = ("Variaciones en %, salvo tipos de interés (pb). Cobre, MOVE, DXY, divisas, Rheinmetall, MERVAL y TA-35 "
+              "proceden de Yahoo, fuente no oficial. La lectura del día la redacta una IA solo con estos datos; las "
+              "frases con cifras que no cuadran con su fuente se eliminan. No es una recomendación de inversión."
+              + (f' <a href="{esc(dashboard_url)}" style="color:{L.BLUE}">Abrir el dashboard</a>.' if dashboard_url else ""))
     title = f"Market Radar · {report_date.strftime('%d/%m/%Y')}"
-    html_doc = (f'<!doctype html><html><body style="margin:0;padding:16px;background:#ffffff">'
-                f'<div style="max-width:760px;margin:0 auto;font-family:Arial,Helvetica,sans-serif;color:{INK}">'
-                f'<h1 style="font-size:20px;margin:0 0 4px">{esc(title)}</h1>'
-                f'<p style="margin:0;color:{GREY};font-size:13px">Informe diario · uso personal</p>'
-                + "".join(body) + footer + "</div></body></html>")
+    date_line = L.long_date(report_date).capitalize()
+    html_doc = L.document("Market Radar · informe diario", date_line, status, "".join(body), footer)
     content = {"movers": [m["instrument"] for m in movers], "alerts": len(recent_alerts),
                "stale": stale, "failed_sources": failed}
     if analysis:
@@ -382,7 +474,7 @@ def flow_directions(overview: list[dict], extras: dict | None) -> tuple[list[str
     return [t for _, t in cot_to], [t for _, t in cot_out]
 
 
-def compose_positioning(overview: list[dict], extras: dict | None) -> str:
+def compose_positioning(overview: list[dict], extras: dict | None, directions: bool = True) -> str:
     if not overview:
         return ""
     by = {(o["instrumento"], o["grupo"]): o for o in overview}
@@ -407,16 +499,16 @@ def compose_positioning(overview: list[dict], extras: dict | None) -> str:
                 rows.append([esc(COT_NAMES[inst]) + (f' <span style="color:{GREY};font-size:11px">({esc(o["categoria"])})</span>'
                                                      if len(groups) > 1 else ""),
                              signed_int(o["neta_contratos"]), pct_cell(o["percentil_5_años"]),
-                             chg_abs(o.get("cambio_4_semanas")), chg_abs(o.get("cambio_13_semanas")),
+                             chg_abs(o.get("cambio_4_semanas")),
                              "—" if pchg is None else ("+" if pchg > 0 else "") + num(pchg, 0 if unit == " pb" else 1) + unit])
         return rows
 
-    head = ["Mercado", "Neta (contratos)", "Pct. 5 años", "4 semanas", "13 semanas", "Precio 13 sem.*"]
+    head = ["Mercado", "Neta", "Pct.", "4 sem.", "Precio*"]
     inst_rows = rows_for(["am"])
     spec_rows = rows_for(["mm", "lf"])
     body = (f'<p style="font-size:13px;margin:4px 0 6px">COT de la CFTC, posiciones del {date[8:10]}/{date[5:7]} '
             "(publicadas el viernes siguiente).</p>")
-    to, out = flow_directions(overview, extras)
+    to, out = flow_directions(overview, extras) if directions else ([], [])
     if to or out:
         def col(title, color, items):
             lis = "".join(f'<li style="margin:3px 0;font-size:13px;line-height:1.4">{esc(i)}</li>' for i in items) \
@@ -459,7 +551,8 @@ def compose_positioning(overview: list[dict], extras: dict | None) -> str:
              "≥ 95 o ≤ 5, ámbar ≥ 90 o ≤ 10. En bonos, índices y bitcoin de CME, gestoras largas y fondos apalancados "
              "cortos son en parte la misma operación de base (contado contra futuro), no apuestas opuestas. Las categorías "
              "del COT no identifican «manos fuertes»: describen tipos de participante. Posicionamiento no es dirección. "
-             "* En bonos, variación del rendimiento (sube el rendimiento = baja el precio del bono).</p>")
+             "Pct.: percentil de la neta en 5 años. 4 sem.: cambio de la neta. * Variación del precio en 13 semanas; en bonos, del "
+             "rendimiento (sube el rendimiento = baja el precio del bono).</p>")
     return section("Posicionamiento por grupos", body)
 
 
