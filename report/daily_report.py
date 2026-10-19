@@ -329,6 +329,57 @@ def load_positioning_extras(db) -> dict:
     return out
 
 
+# Fondos apalancados en bonos, índices y bitcoin de CME: en buena parte operación de base (no direccional).
+BASIS_LF = {"us10y", "us02y", "spx", "ndx", "rut", "btc"}
+FLOW_MIN_OI_PCT = 2.5     # cambio de 4 semanas ≥ 2,5 % del interés abierto para considerarlo un movimiento claro
+ETF_MIN_USD = 1e9         # flujo de 20 sesiones ≥ 1.000 M$
+GOLD_MIN_T = 10           # variación de reservas en 12 meses ≥ 10 t
+
+
+def flow_directions(overview: list[dict], extras: dict | None) -> tuple[list[str], list[str]]:
+    """«Hacia dónde va» y «de dónde sale», con reglas fijas sobre COT, flujos de ETF y oro oficial."""
+    to, out = [], []
+    for o in overview:
+        inst, grp = o["instrumento"], o["grupo"]
+        if grp == "lf" and inst in BASIS_LF:
+            continue
+        c4, oi = o.get("cambio_4_semanas"), o.get("interes_abierto")
+        if c4 is None or not oi:
+            continue
+        share = 100 * c4 / float(oi)
+        if abs(share) < FLOW_MIN_OI_PCT:
+            continue
+        name = COT_NAMES.get(inst, inst)
+        who = o["categoria"].split(" (")[0]
+        net = o["neta_contratos"]
+        if c4 > 0:
+            verb = "reducen cortos en" if net < 0 else "aumentan largos en"
+        else:
+            verb = "aumentan cortos en" if net <= 0 else "reducen largos en"
+        p13 = o.get("precio_cambio_13_semanas")
+        unit = " pb" if inst in ("us10y", "us02y") else " %"
+        price = "" if p13 is None else (f"; {'rendimiento' if unit == ' pb' else 'precio'} en 13 semanas "
+                                        f"{'+' if p13 > 0 else ''}{num(p13, 0 if unit == ' pb' else 1)}{unit}")
+        text = (f"{name}: {who} {verb} {num(abs(c4), 0)} contratos en 4 semanas "
+                f"({num(abs(share), 1)} % del interés abierto; percentil {o['percentil_5_años']} de 5 años{price}).")
+        (to if c4 > 0 else out).append((abs(share), text))
+    extras = extras or {}
+    for t, v in (extras.get("etf") or {}).items():
+        f20 = v.get("20")
+        if f20 is not None and abs(f20) >= ETF_MIN_USD:
+            text = f"ETF {t}: {'entradas' if f20 > 0 else 'salidas'} netas de {num(abs(f20) / 1e6, 0)} M$ en 20 sesiones."
+            (to if f20 > 0 else out).append((-1, text))
+    names = {"CHN": "China", "RUS": "Rusia", "IND": "India", "USA": "EE. UU.", "DEU": "Alemania", "JPN": "Japón"}
+    for c, v in (extras.get("oro_oficial") or {}).items():
+        if abs(v["12m"]) >= GOLD_MIN_T:
+            text = (f"Oro, banco central de {names.get(c, c)}: {'+' if v['12m'] > 0 else ''}{num(v['12m'], 0)} t "
+                    f"en 12 meses ({'+' if v['3m'] > 0 else ''}{num(v['3m'], 0)} t en 3 meses).")
+            (to if v["12m"] > 0 else out).append((-2, text))
+    to.sort(key=lambda x: -x[0])      # primero el COT (por intensidad), después ETF y oro oficial
+    out.sort(key=lambda x: -x[0])
+    return [t for _, t in to[:6]], [t for _, t in out[:6]]
+
+
 def compose_positioning(overview: list[dict], extras: dict | None) -> str:
     if not overview:
         return ""
@@ -363,6 +414,20 @@ def compose_positioning(overview: list[dict], extras: dict | None) -> str:
     spec_rows = rows_for(["mm", "lf"])
     body = (f'<p style="font-size:13px;margin:4px 0 6px">COT de la CFTC, posiciones del {date[8:10]}/{date[5:7]} '
             "(publicadas el viernes siguiente).</p>")
+    to, out = flow_directions(overview, extras)
+    if to or out:
+        def col(title, color, items):
+            lis = "".join(f'<li style="margin:3px 0;font-size:13px;line-height:1.4">{esc(i)}</li>' for i in items) \
+                or f'<li style="font-size:13px;color:{GREY}">Sin movimientos claros.</li>'
+            return (f'<td style="vertical-align:top;width:50%;padding:6px 8px;border-top:3px solid {color}">'
+                    f'<p style="margin:0 0 4px;font-weight:600;font-size:14px;color:{color}">{title}</p>'
+                    f'<ul style="margin:0;padding-left:16px">{lis}</ul></td>')
+        body += ('<table style="border-collapse:collapse;width:100%;margin:6px 0 10px"><tr>'
+                 + col("Hacia dónde va", GREEN, to) + col("De dónde sale", RED, out) + "</tr></table>"
+                 f'<p style="font-size:11px;color:{GREY};margin:0 0 8px">Reglas fijas: cambios de 4 semanas de al menos '
+                 f"el {num(FLOW_MIN_OI_PCT, 1)} % del interés abierto (gestoras y fondos especulativos; se excluyen los "
+                 "fondos apalancados en bonos, índices y bitcoin por la operación de base), flujos de ETF de al menos "
+                 "1.000 M$ en 20 sesiones y variaciones de reservas de oro de al menos 10 t en 12 meses.</p>")
     if inst_rows:
         body += ('<p style="margin:10px 0 4px;font-weight:600;font-size:14px">Dinero institucional: gestoras</p>'
                  + table(head, inst_rows))
