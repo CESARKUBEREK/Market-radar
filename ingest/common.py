@@ -139,6 +139,14 @@ class Supabase:
                         on_conflict="series_id,as_of,vintage")
 
     def start_log(self, source_id: str, mode: str) -> int:
+        # Un registro «running» de más de 2 h es de una ejecución que GitHub cortó (límite de tiempo
+        # o cancelación) y nunca pudo cerrarse: se marca como fallido para que no parezca en curso.
+        stale = (now_utc() - dt.timedelta(hours=2)).isoformat()
+        self.update("provider_sync_logs",
+                    {"source_id": f"eq.{source_id}", "status": "eq.running", "started_at": f"lt.{stale}"},
+                    {"status": "failed", "finished_at": now_utc().isoformat(),
+                     "error": json.dumps({"proceso": "interrumpido sin cerrar (límite de tiempo o cancelación)"},
+                                         ensure_ascii=False)})
         row = self.insert("provider_sync_logs",
                           {"source_id": source_id, "status": "running", "notes": mode},
                           returning=True)[0]

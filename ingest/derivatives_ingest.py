@@ -177,13 +177,14 @@ def deribit_funding(backfill: bool) -> list[dict]:
         else now_utc() - dt.timedelta(days=10)
     rates: dict[dt.date, list[float]] = {}
     cur = start
+    stop = now_utc()            # fijo: si se recalcula en cada vuelta, el bucle nunca termina
     t0 = time.monotonic()
-    while cur < now_utc():
-        if time.monotonic() - t0 > 300 and now_utc() - cur > dt.timedelta(days=2):
+    while cur < stop:
+        if time.monotonic() - t0 > 600 or (time.monotonic() - t0 > 300 and stop - cur > dt.timedelta(days=2)):
             print(f"::warning::Deribit: historial de financiación cortado en {cur.date()} por tiempo; "
                   "se completará en próximas cargas")
             break
-        end = min(cur + dt.timedelta(days=30), now_utc())
+        end = min(cur + dt.timedelta(days=30), stop)
         t1 = time.monotonic()
         res = requests.get("https://www.deribit.com/api/v2/public/get_funding_rate_history", headers=UA, timeout=30,
                            params={"instrument_name": "BTC-PERPETUAL", "start_timestamp": int(cur.timestamp() * 1000),
