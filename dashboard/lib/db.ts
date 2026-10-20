@@ -143,6 +143,30 @@ export async function getReports(limit = 60) {
     stale_sources: string[]; content: Record<string, unknown> }[];
 }
 
+export type Analysis = {
+  report_date: string;
+  model: string | null;
+  titular: string;
+  hechos: { texto: string }[];
+  interpretaciones: { texto: string; confianza: "alta" | "media" | "baja" }[];
+  hipotesis: { si: string; entonces: string; horizonte: string; invalidacion: string }[];
+};
+
+/** Lectura del día del informe más reciente que tenga análisis con IA. */
+export async function getLatestAnalysis(): Promise<Analysis | null> {
+  const c = await db();
+  const { data, error } = await c.from("daily_reports")
+    .select("report_date,model:content->ai->>model,result:content->ai->result")
+    .not("content->ai", "is", null).order("report_date", { ascending: false }).limit(1).maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data?.result) return null;
+  const r = data.result as Record<string, any>;
+  return {
+    report_date: data.report_date as string, model: (data.model as string) ?? null, titular: r.titular ?? "",
+    hechos: r.hechos ?? [], interpretaciones: r.interpretaciones ?? [], hipotesis: r.hipotesis ?? [],
+  };
+}
+
 export async function getReportHtml(date: string): Promise<string | null> {
   const c = await db();
   const { data, error } = await c.from("daily_reports").select("html").eq("report_date", date).maybeSingle();

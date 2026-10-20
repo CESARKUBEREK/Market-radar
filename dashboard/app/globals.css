@@ -85,3 +85,16 @@ tr:hover td { background: var(--panel); }
   h1 { font-size: 19px; }
 }
 tr.strong td { font-weight: 600; }
+
+/* Lectura del día (página principal) */
+.reading { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 18px; }
+.reading-title { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+.reading h3 { font-size: 14px; margin: 14px 0 6px; }
+.reading h3.accent { color: var(--accent); }
+.reading h3.purple { color: #8250df; }
+.reading ul { margin: 0; padding-left: 20px; }
+.reading li { margin: 0 0 6px; line-height: 1.55; }
+.small { font-size: 12px; }
+.tag.conf-alta { color: var(--up); border-color: var(--up); }
+.tag.conf-media { color: #9a6700; border-color: #9a6700; }
+.tag.conf-baja { color: var(--muted); }

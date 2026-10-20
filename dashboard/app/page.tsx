@@ -1,11 +1,12 @@
 import Link from "next/link";
 import { Change, Section, Stat } from "@/components/ui";
-import { getAlerts, getM2, getNetLiquidity, getSummary, getSyncStatus } from "@/lib/db";
+import { getAlerts, getLatestAnalysis, getM2, getNetLiquidity, getSummary, getSyncStatus, type Analysis } from "@/lib/db";
 import { CATEGORIES, RULE_LABELS, STALE_DAYS, daysAgo, num, price, signed } from "@/lib/format";
 
 export default async function MarketsPage() {
-  const [summary, alerts, liquidity, m2, sync] = await Promise.all([
+  const [summary, alerts, liquidity, m2, sync, analysis] = await Promise.all([
     getSummary(), getAlerts({ since: daysAgo(10), limit: 12 }), getNetLiquidity(), getM2(), getSyncStatus(),
+    getLatestAnalysis(),
   ]);
   const liq = liquidity.at(-1);
   const lastM2 = m2.at(-1);
@@ -23,6 +24,8 @@ export default async function MarketsPage() {
           {failed.length > 0 && <div>Fuentes con errores en la última descarga: {failed.map((s) => s.source_id).join(", ")}.</div>}
         </div>
       )}
+
+      {analysis && <Reading a={analysis} />}
 
       <div className="grid-stats" style={{ marginTop: 16 }}>
         <Stat label="Liquidez neta de la Fed" value={liq ? `${num(liq.net_liquidity_b, 0)} mm $` : "—"}
@@ -107,5 +110,40 @@ export default async function MarketsPage() {
         </div>
       </Section>
     </>
+  );
+}
+
+const fmtDate = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`;
+const noSi = (t: string) => t.replace(/^\s*si\s+/i, "");
+
+/** Lectura del día del último informe: qué ha pasado, por qué podría importar e hipótesis. */
+function Reading({ a }: { a: Analysis }) {
+  if (!a.hechos.length && !a.interpretaciones.length && !a.hipotesis.length) return null;
+  return (
+    <Section title="Lectura del día"
+      note={<>Informe del {fmtDate(a.report_date)} · <Link href={`/informes/${a.report_date}`}>Informe completo</Link></>}>
+      <div className="reading">
+        {a.titular && <p className="reading-title">{a.titular}</p>}
+        {a.hechos.length > 0 && (<>
+          <h3>Qué ha pasado</h3>
+          <ul>{a.hechos.map((h, i) => <li key={i}>{h.texto}</li>)}</ul>
+        </>)}
+        {a.interpretaciones.length > 0 && (<>
+          <h3 className="accent">Por qué podría importar</h3>
+          <ul>{a.interpretaciones.map((it, i) => (
+            <li key={i}>{it.texto} <span className={`tag conf-${it.confianza}`}>confianza {it.confianza}</span></li>
+          ))}</ul>
+        </>)}
+        {a.hipotesis.length > 0 && (<>
+          <h3 className="purple">Hipótesis</h3>
+          <ul>{a.hipotesis.map((h, i) => (
+            <li key={i}><b>Si</b> {noSi(h.si)} <b>→</b> {h.entonces}
+              <div className="muted small">{h.horizonte} · se invalida si {noSi(h.invalidacion)}</div></li>
+          ))}</ul>
+        </>)}
+        <p className="muted small">Redactado por IA{a.model ? ` (${a.model})` : ""} solo con los datos del informe; las frases
+          con cifras que no cuadran con su fuente se eliminan. No es una recomendación de inversión.</p>
+      </div>
+    </Section>
   );
 }
