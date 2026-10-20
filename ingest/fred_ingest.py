@@ -80,7 +80,10 @@ def fred_get(path: str, api_key: str, **params) -> dict:
                 msg = r.text
             raise FredError(f"HTTP {r.status_code}: {msg}")
         return r.json()
-    raise FredError(f"FRED no respondió tras 5 intentos (último HTTP {last.status_code if last else '?'})")
+    # Ojo: un Response con error es "falso" en booleano, por eso se compara con None.
+    status = last.status_code if last is not None else "?"
+    body = (last.text or "")[:200].replace("\n", " ") if last is not None else ""
+    raise FredError(f"FRED no respondió tras 5 intentos (último HTTP {status}: {body})")
 
 
 # --------------------------------------------------------------------------- #
@@ -220,6 +223,13 @@ def ingest_series(db: Supabase, api_key: str, series: dict, backfill: bool) -> d
     # Nunca se rellena con la versión vigente si falla la descarga de vintages:
     # eso fecharía todo el historial como publicado hoy y falsearía el backtest.
     vintage_dates = fetch_vintage_dates(api_key, code, realtime_start)
+    if not vintage_dates and not backfill:
+        # Sin versiones nuevas en la ventana (lo normal en series mensuales entre
+        # publicaciones): no hay nada que descargar. Además, pedir observaciones
+        # con un realtime_start posterior a la última vintage hace que FRED
+        # responda con error 5xx una y otra vez.
+        return {"rows": 0, "missing": 0, "first": None, "last": None,
+                "no_new_vintages_since": realtime_start}
     if latest_only:
         # Solo la última versión publicada, fechada en su día de publicación.
         windows = [(vintage_dates[-1], vintage_dates[-1])] if vintage_dates else []
