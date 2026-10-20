@@ -222,12 +222,13 @@ def ingest_series(db: Supabase, api_key: str, series: dict, backfill: bool) -> d
 
     # Nunca se rellena con la versión vigente si falla la descarga de vintages:
     # eso fecharía todo el historial como publicado hoy y falsearía el backtest.
-    vintage_dates = fetch_vintage_dates(api_key, code, realtime_start)
+    # FRED responde 500 si se piden vintages de una ventana en la que la serie no
+    # publicó nada (lo normal en series mensuales entre publicaciones). Por eso se
+    # piden siempre desde FULL_REALTIME_START y se filtra aquí.
+    vintage_dates = [d for d in fetch_vintage_dates(api_key, code, FULL_REALTIME_START)
+                     if d >= realtime_start]
     if not vintage_dates and not backfill:
-        # Sin versiones nuevas en la ventana (lo normal en series mensuales entre
-        # publicaciones): no hay nada que descargar. Además, pedir observaciones
-        # con un realtime_start posterior a la última vintage hace que FRED
-        # responda con error 5xx una y otra vez.
+        # Sin versiones nuevas en la ventana: no hay nada que descargar.
         return {"rows": 0, "missing": 0, "first": None, "last": None,
                 "no_new_vintages_since": realtime_start}
     if latest_only:
