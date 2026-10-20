@@ -27,6 +27,10 @@ on:
         description: "Informe sin enviar (solo guardarlo en daily_reports)"
         type: boolean
         default: false
+      scheduled:
+        description: "Lanzado por la programación diaria de Supabase (se comporta como la ejecución programada)"
+        type: boolean
+        default: false
 
 concurrency:
   group: ingest-daily
@@ -102,6 +106,6 @@ jobs:
           ANALYSIS_MODEL: ${{ vars.ANALYSIS_MODEL || 'gpt-5.4-mini' }}
           ANALYSIS_EFFORT: ${{ vars.ANALYSIS_EFFORT || 'medium' }}
           DASHBOARD_URL: ${{ vars.DASHBOARD_URL || 'https://market-radar-pink.vercel.app' }}
-          REPORT_FORCE: ${{ github.event_name == 'workflow_dispatch' }}
+          REPORT_FORCE: ${{ github.event_name == 'workflow_dispatch' && !inputs.scheduled }}
           REPORT_DRY_RUN: ${{ inputs.report_dry_run }}
         run: python report/daily_report.py

@@ -166,9 +166,32 @@ def load(db: Supabase, report_date: dt.date) -> dict:
 # --------------------------------------------------------------------------- #
 # Composición
 # --------------------------------------------------------------------------- #
+def exceptional_fallback(signals: list[dict]) -> str:
+    """Comentario de situaciones excepcionales sin IA: cuántas hay y las dos más graves."""
+    if not signals:
+        return "Ninguna hoy."
+    top = sorted(signals, key=lambda s: s["severidad"] != "alta")[:2]
+    return (f"{len(signals)} detectada{'s' if len(signals) > 1 else ''} por reglas fijas; "
+            + "; ".join(esc(s["titulo"]) for s in top) + ".")
+
+
+def money_fallback(to: list[str], out: list[str]) -> str:
+    """Comentario de flujos sin IA: solo los activos, sin el detalle (que está en el dashboard)."""
+    def names(lines):
+        return ", ".join(dict.fromkeys(esc(t.split(":")[0]) for t in lines[:3]))
+    if not to and not out:
+        return "Sin movimientos claros."
+    return " ".join(x for x in (f"<b>Entra</b> en {names(to)}." if to else "",
+                                f"<b>Sale</b> de {names(out)}." if out else "") if x)
+
+
 def compose(data: dict, report_date: dt.date, dashboard_url: str,
-            analysis: dict | None = None, analysis_error: str | None = None) -> tuple[str, str, dict]:
-    """Informe en tres niveles: «En 30 segundos», lectura del día y anexo de detalle."""
+            analysis: dict | None = None, analysis_error: str | None = None,
+            executive: bool = False) -> tuple[str, str, dict]:
+    """Informe en tres niveles: «En 30 segundos», lectura del día y anexo de detalle.
+
+    executive=True da la versión del correo: solo lo esencial y el enlace al informe completo del dashboard.
+    """
     L = layout
     summary = data["summary"]
     by_id = {s["instrument_id"]: s for s in summary}
@@ -203,6 +226,10 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str,
         warn.append(f"fuentes con errores: {esc(', '.join(failed))}")
     if warn:
         status += L.para("⚠ " + "; ".join(warn) + ".", size=13, color=L.RED, margin="6px 0 0")
+    full_url = f"{dashboard_url.rstrip('/')}/informes/{report_date.isoformat()}" if dashboard_url else ""
+    if dashboard_url:
+        status += L.button(dashboard_url, "Abrir el dashboard",
+                           (full_url, "Informe completo de hoy") if executive else None)
 
     body = []
 
@@ -217,6 +244,11 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str,
                        + ", ".join(f"{esc(m['instrument'])} {chg(m['chg_1d'], m['is_rate'])}" for m in movers) + ".")
     if analysis_error and not analysis:
         inner += L.para(f"El análisis con IA no está disponible hoy ({esc(analysis_error[:100])}).", 13, L.GREY)
+    flows_to, flows_out = data.get("flow_lines") or ([], [])
+    exc_text = esc(res["excepcional"]["texto"]) if res.get("excepcional") else exceptional_fallback(data.get("signals") or [])
+    money_text = esc(res["dinero"]["texto"]) if res.get("dinero") else money_fallback(flows_to, flows_out)
+    inner += L.comment("⚠", "Situaciones excepcionales", L.RED, exc_text)
+    inner += L.comment("→", "A dónde va el dinero", L.GREEN, money_text)
     key = []
     for iid in ("spx", "ndx", "us10y", "dxy", "gold", "brent", "btc", "eurusd", "move"):
         s = by_id.get(iid)
@@ -242,7 +274,9 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str,
         upcoming.append(L.small("Festivos: " + "; ".join(f'{fmt_day(e["event_at"])} {e.get("notes", "").replace("Festivo: ", "")}'
                                                             for e in holidays)))
     if upcoming:
-        body.append(L.block("Próximos días", L.AMBER, L.bullets(upcoming[:10], 14), note="hora de París"))
+        body.append(L.block("Próximos días", L.AMBER, L.bullets(upcoming[:5 if executive else 10], 14),
+                            note="hora de París"))
+    executive_len = len(body)     # el correo ejecutivo termina aquí; el resto solo va al dashboard
 
     # 3. Lectura del día (IA)
     if res:
@@ -380,10 +414,17 @@ def compose(data: dict, report_date: dt.date, dashboard_url: str,
     if annex:
         body.append(L.block("Anexo", L.GREY, "".join(annex), note="detalle para consultar"))
 
+    if executive:
+        more = ["la lectura completa del día, con hechos, interpretaciones e hipótesis",
+                "el detalle de las situaciones excepcionales y de los flujos",
+                "la tabla de mercados con tendencias", "noticias oficiales, liquidez, correlaciones y posicionamiento"]
+        cta = L.para("En el informe completo: " + "; ".join(more) + ".", 14, L.GREY, "0 0 4px")
+        if full_url:
+            cta += L.button(full_url, "Ver el informe completo")
+        body = body[:executive_len] + [L.block("Más detalle", L.GREY, cta)]
     footer = ("Variaciones en %, salvo tipos de interés (pb). Cobre, MOVE, DXY, divisas, Rheinmetall, MERVAL y TA-35 "
-              "proceden de Yahoo, fuente no oficial. La lectura del día la redacta una IA solo con estos datos; las "
-              "frases con cifras que no cuadran con su fuente se eliminan. No es una recomendación de inversión."
-              + (f' <a href="{esc(dashboard_url)}" style="color:{L.BLUE}">Abrir el dashboard</a>.' if dashboard_url else ""))
+              "proceden de Yahoo, fuente no oficial. El análisis lo redacta una IA solo con estos datos; las "
+              "frases con cifras que no cuadran con su fuente se eliminan. No es una recomendación de inversión.")
     title = f"Market Radar · {report_date.strftime('%d/%m/%Y')}"
     date_line = L.long_date(report_date).capitalize()
     html_doc = L.document("Market Radar · informe diario", date_line, status, "".join(body), footer)
@@ -746,6 +787,11 @@ def main() -> int:
     except Exception as exc:
         data["signals"], data["cot_overview"] = [], []
         print(f"::warning::Detector de situaciones excepcionales: {str(exc)[:300]}")
+    try:
+        data["flow_lines"] = flow_directions(data.get("cot_overview") or [], data.get("positioning_extras"))
+    except Exception as exc:
+        data["flow_lines"] = ([], [])
+        print(f"::warning::Hacia dónde va el dinero: {str(exc)[:300]}")
     analysis, analysis_error = None, None
     try:
         analysis = ai_analysis.run(data, report_date)
@@ -760,8 +806,10 @@ def main() -> int:
     except Exception as exc:          # el informe sale igual, sin análisis
         analysis_error = str(exc)
         print(f"::warning::Análisis IA no disponible: {analysis_error[:300]}")
-    title, html_doc, content = compose(data, report_date, os.environ.get("DASHBOARD_URL", "").strip(),
-                                       analysis, analysis_error)
+    dashboard_url = os.environ.get("DASHBOARD_URL", "").strip()
+    title, html_doc, content = compose(data, report_date, dashboard_url, analysis, analysis_error)
+    # El correo es la versión ejecutiva; el dashboard guarda y muestra el informe completo.
+    email_html = compose(data, report_date, dashboard_url, analysis, analysis_error, executive=True)[1]
     row = {"report_date": report_date.isoformat(), "generated_at": now_utc().isoformat(),
            "experimental": True, "content": content, "html": html_doc,
            "stale_sources": content["stale"], "status": "draft"}
@@ -795,10 +843,11 @@ def main() -> int:
     if args.dry_run:
         out = Path(os.environ.get("REPORT_OUT", "report.html"))
         out.write_text(html_doc, encoding="utf-8")
-        print(f"Borrador guardado en daily_reports y en {out}.")
+        out.with_name(out.stem + "-correo" + out.suffix).write_text(email_html, encoding="utf-8")
+        print(f"Borrador guardado en daily_reports y en {out} (versión del correo: {out.stem}-correo{out.suffix}).")
         return 0
     try:
-        send(title, html_doc)
+        send(title, email_html)
     except Exception as exc:
         db.update("daily_reports", {"report_date": f"eq.{report_date.isoformat()}"}, {"status": "failed"})
         print(f"::error::No se pudo enviar el informe: {str(exc)[:300]}")

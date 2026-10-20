@@ -92,6 +92,23 @@ def chips(items: list[tuple[str, str, str]]) -> str:
     return f'<div style="margin:12px 0 0">{cells}</div>'
 
 
+def button(url: str, label: str, secondary: tuple[str, str] | None = None) -> str:
+    """Botón visible y compatible con correo (tabla con fondo; funciona también en Outlook)."""
+    sec = (f'<div style="margin:8px 0 0;font-size:14px"><a href="{esc(secondary[0])}" style="color:{BLUE};'
+           f'text-decoration:underline">{esc(secondary[1])}</a></div>' if secondary else "")
+    return (f'<table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px 0 0"><tr>'
+            f'<td style="background:{BLUE};border-radius:8px">'
+            f'<a href="{esc(url)}" style="display:inline-block;padding:11px 22px;font-size:15px;font-weight:700;'
+            f'color:#ffffff;text-decoration:none;white-space:nowrap;font-family:{FONT}">{esc(label)} →</a></td>'
+            f'</tr></table>{sec}')
+
+
+def comment(icon: str, label: str, color: str, text: str) -> str:
+    """Línea de comentario dentro de «En 30 segundos»: etiqueta de color y una o dos frases."""
+    return (f'<div style="margin:12px 0 0;padding-top:10px;border-top:1px solid {LINE};font-size:14px;line-height:1.55">'
+            f'<span style="font-weight:700;color:{color}">{icon} {esc(label)}.</span> {text}</div>')
+
+
 def table(headers: list[str], rows: list[list[str]], *, align_right_from: int = 1, size: int = 14,
           group_rows: dict[int, str] | None = None) -> str:
     """Tabla legible: cabecera discreta, filas alternas y cifras a la derecha.

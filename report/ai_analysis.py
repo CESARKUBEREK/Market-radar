@@ -187,6 +187,11 @@ def build_evidence(data: dict, report_date: dt.date) -> dict:
                                    "interes_abierto_percentil_5_años", "fecha_posiciones")}
             for o in data["cot_overview"]]}
 
+    to, out = data.get("flow_lines") or ([], [])
+    if to or out:
+        ev["X_flujos"] = {"tipo": "contexto macro (calculado por reglas: COT a 4 semanas, ETF a 20 sesiones, "
+                                  "oro de bancos centrales)", "datos": {"entra": to, "sale": out}}
+
     for i, n in enumerate((data.get("news_ai") or [])[:20], 1):
         ev[f"N{i}"] = {"tipo": "noticia oficial", "fecha": _paris(n["published_at"]), "fuente": n["source_name"],
                        "titular": n["title"], "resumen": (n.get("summary") or "")[:300], "url": n["url"]}
@@ -224,6 +229,12 @@ QUÉ ESCRIBIR, en este orden de importancia:
 1. LO ESENCIAL: un «titular» de una frase con la idea dominante del día y hasta 3 «puntos» que la sostengan. \
 Prioriza lo que cambia la lectura del mercado: movimientos inusuales, rupturas de tendencia, extremos \
 históricos, situaciones S, tensiones entre activos. No describas lo que se movió poco.
+   Añade dos comentarios ejecutivos de una o dos frases (40 palabras como máximo cada uno):
+   - «excepcional»: qué situaciones S destacan hoy y qué sugieren en conjunto, respetando su naturaleza \
+(no validadas). Si no hay ninguna S, texto «Ninguna hoy.» y fuentes vacías.
+   - «dinero»: hacia dónde entra y de dónde sale el dinero según X_flujos (y X_posicionamiento_cot), nombrando \
+activos y quién se mueve; di si el movimiento acompaña o contradice al precio. Si no hay X_flujos, texto \
+«Sin movimientos claros.» y fuentes vacías.
 2. HECHOS (máx. 6): qué ha pasado en la sesión y en la semana, con cifras y fechas. NO repitas el contexto \
 histórico de cada activo: eso ya lo muestra el panorama. Si un hecho compara activos, que estén en la evidencia.
 3. INTERPRETACIONES (máx. 4): por qué podría importar, en condicional. Cruza activos y macro. No atribuyas un \
@@ -265,10 +276,16 @@ innecesarios (escribe «cierre de cortos», «grandes tecnológicas», «activos
 SCHEMA = {
     "type": "object",
     "additionalProperties": False,
-    "required": ["titular", "puntos", "situaciones", "panorama", "hechos", "interpretaciones", "hipotesis",
-                 "a_vigilar", "limitaciones"],
+    "required": ["titular", "puntos", "excepcional", "dinero", "situaciones", "panorama", "hechos",
+                 "interpretaciones", "hipotesis", "a_vigilar", "limitaciones"],
     "properties": {
         "titular": {"type": "string"},
+        "excepcional": {"type": "object", "additionalProperties": False, "required": ["texto", "fuentes"],
+                        "properties": {"texto": {"type": "string"},
+                                       "fuentes": {"type": "array", "items": {"type": "string"}}}},
+        "dinero": {"type": "object", "additionalProperties": False, "required": ["texto", "fuentes"],
+                   "properties": {"texto": {"type": "string"},
+                                  "fuentes": {"type": "array", "items": {"type": "string"}}}},
         "puntos": {"type": "array", "items": {
             "type": "object", "additionalProperties": False, "required": ["texto", "fuentes"],
             "properties": {"texto": {"type": "string"}, "fuentes": {"type": "array", "items": {"type": "string"}}}}},
@@ -519,13 +536,27 @@ def validate(result: dict, known: set[str], evidence: dict | None = None) -> tup
             continue
         hp = {**hp, "horizonte_sesiones": max(1, min(20, int(hp.get("horizonte_sesiones") or 5)))}
         hyp.append({**hp, "se_apoya_en": refs})
+    def comment(key: str) -> dict | None:
+        """Comentario ejecutivo: sin fuente solo vale si no lleva cifras («Ninguna hoy.»)."""
+        c = result.get(key) or {}
+        text = (c.get("texto") or "").strip()
+        if not text:
+            return None
+        refs = ok_refs(c.get("fuentes", []))
+        bad = unverified(text, refs, evidence) if refs else [x for x in _figures(text) if x > 0]
+        if bad:
+            dropped.append(f"comentario «{key}» con cifras no verificadas {bad}: {text[:70]}")
+            return None
+        return {"texto": text, "fuentes": refs}
+
     titular = result.get("titular", "").strip()
     if titular and unverified(titular, list(evidence), evidence):
         dropped.append(f"titular con cifras no verificadas: {titular[:80]}")
         titular = re.sub(r"\s*\([^)]*\d[^)]*\)", "", titular)      # se conserva la idea sin la cifra entre paréntesis
         if unverified(titular, list(evidence), evidence):
             titular = ""
-    return {"titular": titular, "puntos": puntos[:3], "situaciones": situaciones, "panorama": panorama,
+    return {"titular": titular, "puntos": puntos[:3],
+            "excepcional": comment("excepcional"), "dinero": comment("dinero"), "situaciones": situaciones, "panorama": panorama,
             "hechos": hechos, "interpretaciones": interp, "hipotesis": hyp, "a_vigilar": vigilar[:3],
             "limitaciones": result.get("limitaciones", [])[:2]}, dropped
 
