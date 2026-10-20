@@ -229,7 +229,8 @@ QUÉ ESCRIBIR, en este orden de importancia:
 1. LO ESENCIAL: un «titular» de una frase con la idea dominante del día y hasta 3 «puntos» que la sostengan. \
 Prioriza lo que cambia la lectura del mercado: movimientos inusuales, rupturas de tendencia, extremos \
 históricos, situaciones S, tensiones entre activos. No describas lo que se movió poco.
-   Añade dos comentarios ejecutivos de una o dos frases (40 palabras como máximo cada uno):
+   Añade dos comentarios ejecutivos de una o dos frases (40 palabras como máximo cada uno), sin \
+identificadores de evidencia en el texto (nada de «S1», «X_flujos»: nombra los activos):
    - «excepcional»: qué situaciones S destacan hoy y qué sugieren en conjunto, respetando su naturaleza \
 (no validadas). Si no hay ninguna S, texto «Ninguna hoy.» y fuentes vacías.
    - «dinero»: hacia dónde entra y de dónde sale el dinero según X_flujos (y X_posicionamiento_cot), nombrando \
@@ -363,7 +364,7 @@ def _fallback_reading(t: dict) -> str:
 # Expresiones que contienen números pero no son cifras de mercado (nombres, fechas, plazos).
 _NOT_FIGURES = [
     r"\bUS\d+Y\b", r"\b\d+-\d+\b", r"\bS&P\s*500\b", r"Nasdaq-100", r"Russell\s*2000", r"TA-35", r"\bMM\d+\b",
-    r"\bM2\b", r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b", r"\b(?:19|20)\d{2}\b",
+    r"\bM2\b", r"\b[SMTCANPW]\d{1,2}\b", r"\b\d{1,2}/\d{1,2}(?:/\d{2,4})?\b", r"\b(?:19|20)\d{2}\b",
     r"\b\d+\s*(?:sesiones|sesión|semanas?|meses|mes|años?|días?|horas?|veces|contratos? de)\b",
     r"medias? de \d+(?: y \d+)?", r"\b\d+\s*(?:y|o)\s*\d+\s*(?:sesiones|meses|semanas)",
     r"\bpercentil(?:es)?\s+\d+\s+de\s+\d+\s+años", r"\b(?:primer|segund|tercer)\w*\b",
@@ -540,6 +541,8 @@ def validate(result: dict, known: set[str], evidence: dict | None = None) -> tup
         """Comentario ejecutivo: sin fuente solo vale si no lleva cifras («Ninguna hoy.»)."""
         c = result.get(key) or {}
         text = (c.get("texto") or "").strip()
+        # Identificadores entre paréntesis («(S1, S2)») sobran en un texto para el lector
+        text = re.sub(r"\s*\((?:[SMTCANPWX]\w*\d\w*(?:,\s*|\s+y\s+)?)+\)", "", text).strip()
         if not text:
             return None
         refs = ok_refs(c.get("fuentes", []))
